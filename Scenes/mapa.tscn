@@ -1,0 +1,71 @@
+[gd_scene load_steps=4 format=3 uid="uid://cy45oxo48l0u8"]
+
+[ext_resource type="Script" uid="uid://d4ddrjwlqdl6c" path="res://Scripts/UI/MapaUI.cs" id="1_goa42"]
+[ext_resource type="PackedScene" uid="uid://x4f2rn5gur1" path="res://Scenes/Territorios.tscn" id="2_p41nb"]
+
+[sub_resource type="CanvasTexture" id="CanvasTexture_p41nb"]
+
+[node name="Mapa" type="Node2D"]
+position = Vector2(-2, 19)
+scale = Vector2(0.677787, 0.86949)
+script = ExtResource("1_goa42")
+
+[node name="Node2D" parent="." instance=ExtResource("2_p41nb")]
+position = Vector2(687.532, 451.989)
+scale = Vector2(0.825062, 0.682687)
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="TurnoLabel" type="Label" parent="HUD"]
+offset_left = 37.0
+offset_top = 9.0
+offset_right = 266.0
+offset_bottom = 133.0
+scale = Vector2(0.831683, 0.928827)
+text = "Turno:"
+
+[node name="ResultadoDado" type="Label" parent="HUD"]
+offset_left = 465.0
+offset_top = 11.0
+offset_right = 694.0
+offset_bottom = 135.0
+scale = Vector2(0.831683, 0.928827)
+text = "Resultado:"
+
+[node name="LanzarDado" type="Button" parent="HUD"]
+offset_left = 811.0
+offset_top = 530.0
+offset_right = 928.0
+offset_bottom = 598.0
+scale = Vector2(0.959941, 1.26267)
+text = "Lanzar Dado"
+icon = SubResource("CanvasTexture_p41nb")
+
+[node name="FinalizarRefuerzos" type="Button" parent="HUD"]
+offset_left = 941.0
+offset_top = 530.0
+offset_right = 1103.0
+offset_bottom = 603.0
+scale = Vector2(1.00596, 1.10655)
+text = "Finalizar refuerzos"
+
+[node name="FinalizarMovimiento" type="Button" parent="HUD"]
+offset_left = 932.0
+offset_top = 27.0
+offset_right = 1006.0
+offset_bottom = 93.0
+scale = Vector2(1.88838, 1.29097)
+button_mask = 0
+text = "Finalizar"
+
+[node name="CantidadAtaque" type="SpinBox" parent="HUD"]
+offset_left = 956.0
+offset_top = 291.0
+offset_right = 1042.56
+offset_bottom = 322.0
+
+[node name="CantidadDefensa" type="SpinBox" parent="HUD"]
+offset_left = 954.0
+offset_top = 356.0
+offset_right = 1040.56
+offset_bottom = 387.0
