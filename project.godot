@@ -11,10 +11,14 @@ config_version=5
 [application]
 
 config/name="CrazyRisk"
-run/main_scene="uid://bvc2wjo6nvfoc"
+run/main_scene="uid://cy45oxo48l0u8"
 config/features=PackedStringArray("4.4", "C#", "Forward Plus")
 config/icon="res://icon.svg"
 
 [dotnet]
 
 project/assembly_name="CrazyRisk"
+
+[global_group]
+
+Terreno=""

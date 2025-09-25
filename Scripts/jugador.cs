@@ -3,13 +3,14 @@ namespace Scripts
 	using System;
 	using System.Collections.Generic;
 	using Godot;
-
+	using System.Linq;        
+	using TerrenoNodo = global::Terreno;  
 	public class Jugador
 	{
 		public string Alias { get; set; }
 		public string Color { get; set; }
 		public int TropasDisponibles { get; set; }
-		public List<Terreno> Territorios { get; set; } = new List<Terreno>();
+		public List<TerrenoNodo> Territorios { get; set; } = new List<TerrenoNodo>();
 		public List<Carta> Cartas { get; set; } = new List<Carta>();
 
 		public void Refuerzos()
@@ -20,7 +21,7 @@ namespace Scripts
 
 		public void Atacar(Terreno origen, Terreno destino)
 		{
-			if (origen.Tropas < 2 || !origen.Adyacentes.Contains(destino))
+			if (origen.Tropas < 2 || !origen.Adyacentes().Contains(destino))
 			{
 				GD.Print("No se puede atacar");
 				return;
