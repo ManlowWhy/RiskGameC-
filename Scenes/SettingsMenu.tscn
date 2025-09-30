@@ -1,0 +1,31 @@
+[gd_scene load_steps=2 format=3 uid="uid://beoqr4rv2bg5f"]
+
+[ext_resource type="Script" uid="uid://bp0xr7uohnib3" path="res://Scenes/SettingsMenu.cs" id="1_8uw7q"]
+
+[node name="SettingsMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("1_8uw7q")
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="VBox" type="VBoxContainer" parent="Center"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Center/VBox"]
+layout_mode = 2
+text = "Opciones"
+
+[node name="Label" type="Label" parent="Center/VBox"]
+layout_mode = 2
+text = "Volumen"
+
+[node name="Volumen" type="HSlider" parent="Center/VBox"]
+layout_mode = 2
+
+[node name="BtnBack" type="Button" parent="Center/VBox"]
+layout_mode = 2
+text = "Volver"
