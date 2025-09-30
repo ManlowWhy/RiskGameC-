@@ -1,23 +1,46 @@
-[gd_scene load_steps=2 format=3 uid="uid://crp37c80rtxx7"]
+[gd_scene load_steps=5 format=3 uid="uid://crp37c80rtxx7"]
 
 [ext_resource type="Script" uid="uid://4mrhdhhmhymy" path="res://Scenes/MainMenu.cs" id="1_tt5f1"]
+[ext_resource type="Texture2D" uid="uid://n3x0dskn8qvi" path="res://Fondo.png" id="2_853f1"]
+[ext_resource type="Texture2D" uid="uid://bui54qp1htdo0" path="res://Risk.png" id="3_8saeu"]
+[ext_resource type="AudioStream" uid="uid://l72lnxphv23c" path="res://audio/Menu 1 - Super Smash Flash 2 Music Extended (1).ogg" id="4_ghw46"]
 
 [node name="MainMenu" type="Control"]
 layout_mode = 3
 anchors_preset = 0
 script = ExtResource("1_tt5f1")
 
+[node name="TextureRect" type="TextureRect" parent="."]
+layout_mode = 2
+offset_left = 577.0
+offset_top = 287.0
+offset_right = 577.0
+offset_bottom = 287.0
+texture = ExtResource("2_853f1")
+expand_mode = 1
+stretch_mode = 3
+
+[node name="Risk" type="TextureRect" parent="."]
+layout_mode = 2
+offset_left = 225.0
+offset_top = -141.0
+offset_right = 1249.0
+offset_bottom = 883.0
+scale = Vector2(0.692605, 0.632723)
+texture = ExtResource("3_8saeu")
+
 [node name="Center" type="CenterContainer" parent="."]
 layout_mode = 0
-offset_right = 40.0
-offset_bottom = 40.0
+offset_left = 272.0
+offset_top = 376.0
+offset_right = 872.0
+offset_bottom = 596.0
 
 [node name="VBox" type="VBoxContainer" parent="Center"]
 layout_mode = 2
 
 [node name="Title" type="Label" parent="Center/VBox"]
 layout_mode = 2
-text = "CrazyRisk"
 horizontal_alignment = 1
 
 [node name="btn2" type="Button" parent="Center/VBox"]
@@ -35,3 +58,10 @@ text = "Configuraciones"
 [node name="btnQuit" type="Button" parent="Center/VBox"]
 layout_mode = 2
 text = "Salir"
+
+[node name="Musica" type="AudioStreamPlayer2D" parent="."]
+stream = ExtResource("4_ghw46")
+volume_db = -8.0
+autoplay = true
+bus = &"Music"
+parameters/looping = true
