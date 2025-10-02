@@ -69,3 +69,7 @@ offset_left = 954.0
 offset_top = 356.0
 offset_right = 1040.56
 offset_bottom = 387.0
+
+[node name="TextureRect" type="TextureRect" parent="HUD"]
+offset_right = 40.0
+offset_bottom = 40.0

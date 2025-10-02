@@ -11,7 +11,7 @@ public class MsgStart : MsgBase { public int max { get; set; } public List<strin
 
 // ===== Comandos (cliente -> host) =====
 public class CmdClick : MsgBase { public string terr { get; set; } public string actor { get; set; } }
-public class CmdEndPhase : MsgBase { }
+public class CmdEndPhase : MsgBase { } // usamos objetos anónimos para otros cmd_* (attack/defense_choice)
 
 // ===== Parches (host -> todos) =====
 public class PatchTerr  : MsgBase { public string terr { get; set; } public string ownerId { get; set; } public int tropas { get; set; } }
@@ -29,7 +29,7 @@ public partial class GameManager : Node
 	public bool IsHost { get; private set; }
 	public string LocalName { get; private set; } = "Jugador 1";
 
-	// <<< NUEVO: Id del jugador local ("J1"/"J2"/"J3") >>>
+	// Id del jugador local ("J1"/"J2"/"J3")
 	public string MyId { get; private set; } = null;
 
 	public int MaxPlayers { get; private set; } = 2;
@@ -51,7 +51,8 @@ public partial class GameManager : Node
 		_net = GetNodeOrNull<NetworkManager>("/root/NetworkManager");
 		if (_net != null)
 		{
-			_net.Connected    += () => {
+			_net.Connected    += () =>
+			{
 				// al conectar como cliente, me presento
 				var hello = new MsgHello { type = "hello", name = LocalName };
 				_net.SendJson(hello);
@@ -96,7 +97,7 @@ public partial class GameManager : Node
 
 		_lobbyNames.Clear();
 		_lobbyNames.Add(LocalName); // host primero
-		MyId = "J1";                // <<< host siempre J1
+		MyId = "J1";                // host siempre J1
 
 		_net.StartServer(port);     // auto-conecta al host como cliente
 		ReemitLobby();
@@ -115,6 +116,7 @@ public partial class GameManager : Node
 	public void SendCmd(object cmd)
 	{
 		if (!IsOnline) return;
+		// Si soy host, atajo y proceso como si hubiese llegado por red
 		if (IsHost) OnNetMessage(JsonSerializer.Serialize(cmd), 0);
 		else        _net?.SendJson(cmd);
 	}
@@ -130,7 +132,7 @@ public partial class GameManager : Node
 		{
 			using var jdoc = JsonDocument.Parse(json);
 			if (!jdoc.RootElement.TryGetProperty("type", out var typeEl)) return;
-			var type = typeEl.GetString();
+			var type = typeEl.GetString() ?? "";
 
 			// ---- Servidor ----
 			if (IsHost)
@@ -164,7 +166,7 @@ public partial class GameManager : Node
 					MaxPlayers = NumPlayers = start.max;
 					PlayerNames = start.names.ToArray();
 
-					// <<< NUEVO: determinar MyId por mi nombre en la lista >>>
+					// determinar MyId por mi nombre en la lista
 					int idx = Array.FindIndex(PlayerNames, n => string.Equals(n, LocalName, StringComparison.Ordinal));
 					if (idx < 0) idx = 0;
 					MyId = idx == 0 ? "J1" : (idx == 1 ? "J2" : "J3");
@@ -174,18 +176,22 @@ public partial class GameManager : Node
 				}
 			}
 
-			// ---- Parches (host -> todos) ----
-			if (type == "patch_terr" || type == "patch_phase")
+			// ---- Parches/estado (host -> todos) ----
+			// Incluye todos los patch_* y los mensajes especiales de la batalla.
+			if (type.StartsWith("patch_", StringComparison.OrdinalIgnoreCase)
+				|| type == "start_defense"
+				|| type == "battle_result")
 			{
-				var mapa = GetTree().CurrentScene?.GetNodeOrNull("MapaUI") as Node;
+				var mapa = FindMapaUINode();
 				(mapa as IAplicaParches)?.ApplyNetPatch(json);
 				return;
 			}
 
 			// ---- Comandos (cliente -> host) ----
-			if (IsHost && (type == "cmd_click" || type == "cmd_end_phase"))
+			// Cualquier cmd_* debe llegar al host y ser pasado a MapaUI.ProcessNetCommand
+			if (IsHost && type.StartsWith("cmd_", StringComparison.OrdinalIgnoreCase))
 			{
-				var mapa = GetTree().CurrentScene?.GetNodeOrNull("MapaUI") as Node;
+				var mapa = FindMapaUINode();
 				(mapa as IProcesaComandos)?.ProcessNetCommand(json);
 				return;
 			}
@@ -216,6 +222,32 @@ public partial class GameManager : Node
 		MyId        = "J1"; // host
 
 		GetTree().ChangeSceneToFile(GameScenePath);
+	}
+
+	// ==== Localizador robusto del nodo que implementa MapaUI ====
+	private Node FindMapaUINode()
+	{
+		var scene = GetTree().CurrentScene;
+		if (scene == null) return null;
+
+		// 1) Si el root YA implementa las interfaces, úsalo
+		if (scene is IAplicaParches || scene is IProcesaComandos)
+			return scene;
+
+		// 2) Intento rápido por nombre exacto (compatibilidad)
+		var byName = scene.GetNodeOrNull<Node>("MapaUI");
+		if (byName != null) return byName;
+
+		// 3) Búsqueda recursiva por el primer nodo que implemente cualquiera de las interfaces
+		Node found = null;
+		void DFS(Node n)
+		{
+			if (found != null || n == null) return;
+			if (n is IAplicaParches || n is IProcesaComandos) { found = n; return; }
+			foreach (Node ch in n.GetChildren()) DFS(ch);
+		}
+		DFS(scene);
+		return found;
 	}
 
 	public void QuitGame() => GetTree().Quit();

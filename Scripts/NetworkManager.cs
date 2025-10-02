@@ -160,11 +160,10 @@ public partial class NetworkManager : Node
 			{
 				var line = info.Reader.ReadLine(); // un JSON por línea
 				if (line == null) break;
-				// En servidor, ponemos peerId del emisor
-				_inbox.Enqueue((line, info.PeerId));
 
-				// Broadcast automático del RAW (útil para chat / sync simple)
-				SendRawJsonToAll(line); // Incluye al que lo mandó; si quieres excluirlo, crea otra variante
+				// En servidor, encolamos (peerId del emisor) y dejamos que GameManager
+				// decida si hay que broadcast (patches) o procesar (cmd_*).
+				_inbox.Enqueue((line, info.PeerId));
 			}
 		}
 		catch (IOException) { /* cliente cerró */ }
