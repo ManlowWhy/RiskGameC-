@@ -12,40 +12,28 @@ namespace Scripts
 		public string Color { get; set; }
 		public int TropasDisponibles { get; set; }
 
-		/// <summary> Lista de territorios que controla (si decides mantenerla). </summary>
+		/// <summary>Lista de territorios que controla.</summary>
 		public List<TerrenoNodo> Territorios { get; set; } = new List<TerrenoNodo>();
 
-		/// <summary> Cartas del jugador (opcional; no interfiere si aún no usas cartas). </summary>
-		public List<Carta> Cartas { get; set; } = new List<Carta>();
+		/// <summary>Cartas del jugador.</summary>
+		public List<Carta> Cartas { get; } = new List<Carta>();
 
-		/// <summary> Flag para otorgar carta al final del turno si conquistó (lo maneja MapaUI). </summary>
+		/// <summary>Flags opcionales (no estrictamente usados por MapaUI).</summary>
 		public bool ConquistoEsteTurno { get; set; } = false;
-
-		/// <summary>
-		/// Calcula y añade refuerzos mínimos (3 o territorios/3). 
-		/// Nota: MapaUI ya hace esto en IniciarTurno(); usa esto solo si prefieres hacerlo fuera.
-		/// </summary>
-		public void Refuerzos()
-		{
-			int baseRefuerzo = Math.Max(3, Territorios.Count / 3);
-			TropasDisponibles += baseRefuerzo;
-		}
+		public bool RecibioCartaEsteTurno { get; set; } = false;
 
 		// =========================
 		//         CARTAS
 		// =========================
 
-		/// <summary> Devuelve true si hay un trío válido y saca el trío por out. </summary>
+		/// <summary>Devuelve true si hay un trío válido y lo entrega en 'trio'.</summary>
 		public bool TieneTrioValido(out List<Carta> trio)
 		{
 			trio = null;
 			if (Cartas == null || Cartas.Count < 3) return false;
 
-			// Ejemplo genérico: o 3 del mismo tipo o 1 de cada tipo.
-			// Ajusta a tu modelo real de Carta (Tipo/Simbolo/etc.)
+			// Tres iguales
 			var porTipo = Cartas.GroupBy(c => c.Tipo).ToDictionary(g => g.Key, g => g.ToList());
-
-			// 1) Tres iguales
 			foreach (var kv in porTipo)
 			{
 				if (kv.Value.Count >= 3)
@@ -55,28 +43,30 @@ namespace Scripts
 				}
 			}
 
-			// 2) Uno de cada tipo (si tienes exactamente 3 tipos)
-			if (porTipo.Keys.Count >= 3)
+			// Uno de cada (si existen los 3 tipos)
+			if (porTipo.Keys.Contains(TipoCarta.Infanteria) &&
+				porTipo.Keys.Contains(TipoCarta.Caballeria) &&
+				porTipo.Keys.Contains(TipoCarta.Artilleria))
 			{
-				var diferentes = porTipo.Values.Select(v => v.First()).Take(3).ToList();
-				if (diferentes.Count == 3)
+				trio = new List<Carta>
 				{
-					trio = diferentes;
-					return true;
-				}
+					porTipo[TipoCarta.Infanteria].First(),
+					porTipo[TipoCarta.Caballeria].First(),
+					porTipo[TipoCarta.Artilleria].First()
+				};
+				return true;
 			}
+
 			return false;
 		}
 
-		/// <summary> Recibe una carta (usado por MapaUI cuando roba tras conquistar). </summary>
+		/// <summary>Recibe una carta.</summary>
 		public void RecibirCarta(Carta c)
 		{
 			if (c != null) Cartas.Add(c);
 		}
 
-		/// <summary>
-		/// Intercambia un trío por tropas (el valor de tropas lo decide MapaUI/FiboCounter).
-		/// </summary>
+		/// <summary>Intercambia un trío por tropas (valor lo decide MapaUI/FiboCounter).</summary>
 		public void IntercambiarCartas(List<Carta> trio, int tropasOtorgadas)
 		{
 			if (trio == null || trio.Count != 3) return;
@@ -84,17 +74,53 @@ namespace Scripts
 			TropasDisponibles += Math.Max(0, tropasOtorgadas);
 		}
 
-		// Overload para compatibilidad si la llamas sin tropas (no hace nada más que quitar las cartas).
+		/// <summary>Overload sin tropas (solo quita cartas).</summary>
 		public void IntercambiarCartas(List<Carta> trio)
 		{
 			if (trio == null || trio.Count != 3) return;
 			foreach (var c in trio) Cartas.Remove(c);
 		}
-	}
 
-	/// <summary>
-	/// Ejemplo mínimo de Carta para compilar. 
-	/// Adáptalo a tu implementación real (Tipo, Territorio, comodines, etc.).
-	/// </summary>
-	
+		/// <summary>Conteo por tipo para HUD y lógica.</summary>
+		public (int inf, int cab, int art) ConteoPorTipo()
+		{
+			int inf = 0, cab = 0, art = 0;
+			foreach (var c in Cartas)
+			{
+				if (c.Tipo == TipoCarta.Infanteria) inf++;
+				else if (c.Tipo == TipoCarta.Caballeria) cab++;
+				else if (c.Tipo == TipoCarta.Artilleria) art++;
+			}
+			return (inf, cab, art);
+		}
+
+		/// <summary>Selecciona un trío determinista (prioriza uno de cada; si no, tres iguales).</summary>
+		public List<Carta> ElegirTrioDeterminista()
+		{
+			if (Cartas == null || Cartas.Count < 3) return null;
+			var (inf, cab, art) = ConteoPorTipo();
+
+			// Uno de cada
+			if (inf > 0 && cab > 0 && art > 0)
+			{
+				return new List<Carta>
+				{
+					Cartas.First(c => c.Tipo == TipoCarta.Infanteria),
+					Cartas.First(c => c.Tipo == TipoCarta.Caballeria),
+					Cartas.First(c => c.Tipo == TipoCarta.Artilleria)
+				};
+			}
+
+			// Tres iguales del tipo más abundante
+			var counts = new (TipoCarta tipo, int n)[] {
+				(TipoCarta.Infanteria, inf),
+				(TipoCarta.Caballeria, cab),
+				(TipoCarta.Artilleria, art)
+			};
+			var mejor = counts.OrderByDescending(x => x.n).First();
+			if (mejor.n >= 3) return Cartas.Where(c => c.Tipo == mejor.tipo).Take(3).ToList();
+
+			return null;
+		}
+	}
 }

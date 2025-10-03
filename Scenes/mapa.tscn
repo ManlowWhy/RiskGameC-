@@ -41,6 +41,15 @@ scale = Vector2(0.959941, 1.26267)
 text = "Lanzar Dado"
 icon = SubResource("CanvasTexture_p41nb")
 
+[node name="IrAAtaqueBtn" type="Button" parent="HUD"]
+offset_left = 939.0
+offset_top = 144.0
+offset_right = 1056.0
+offset_bottom = 212.0
+scale = Vector2(0.959941, 1.26267)
+text = "Ir a Ataque"
+icon = SubResource("CanvasTexture_p41nb")
+
 [node name="FinalizarRefuerzos" type="Button" parent="HUD"]
 offset_left = 941.0
 offset_top = 530.0
@@ -58,6 +67,24 @@ scale = Vector2(1.88838, 1.29097)
 button_mask = 0
 text = "Finalizar"
 
+[node name="FinalizarTurnoBtn" type="Button" parent="HUD"]
+offset_left = 771.0
+offset_top = 23.0
+offset_right = 845.0
+offset_bottom = 89.0
+scale = Vector2(1.88838, 1.29097)
+button_mask = 0
+text = "Finalizar Turno"
+
+[node name="CanjearCartasBtn" type="Button" parent="HUD"]
+offset_left = 275.0
+offset_top = 55.0
+offset_right = 343.0
+offset_bottom = 129.0
+scale = Vector2(1.88838, 1.29097)
+button_mask = 0
+text = "Canjear"
+
 [node name="CantidadAtaque" type="SpinBox" parent="HUD"]
 offset_left = 956.0
 offset_top = 291.0
@@ -73,3 +100,10 @@ offset_bottom = 387.0
 [node name="TextureRect" type="TextureRect" parent="HUD"]
 offset_right = 40.0
 offset_bottom = 40.0
+
+[node name="CartasLabel" type="Label" parent="HUD"]
+offset_left = 32.0
+offset_top = 87.0
+offset_right = 246.0
+offset_bottom = 110.0
+text = "Inf x0 | Cab x0 | Art x0 (0/5)"
