@@ -15,6 +15,10 @@ public interface IProcesaComandos { void ProcessNetCommand(string json); }
 
 public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 {
+	// === Neutral (bando sin turno) ===
+	private const string NEUTRAL_ID = "NEUTRAL";
+	private const int NEUTRAL_TROOPS_PER_TERR = 3;
+
 	// === Jugadores ===
 	private Jugador j1;
 	private Jugador j2;
@@ -73,7 +77,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 	private Label _defenseTitle;
 	private SpinBox _defenseSpin;
   	private Button _defenseDiceBtn;
-	private string _defenderOwnerId = "";   // "J1"/"J2"/"J3"
+	private string _defenderOwnerId = "";   // "J1"/"J2"/"J3"/"NEUTRAL"
 	private bool _esperandoDefensa = false;
 	private int _turnOwnerCardsCount = 0;
 
@@ -86,6 +90,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		["J1"] = new Color(0.9f, 0.2f, 0.2f), // rojo
 		["J2"] = new Color(0.2f, 0.4f, 0.9f), // azul
 		["J3"] = new Color(0.2f, 0.8f, 0.2f), // verde
+		["NEUTRAL"] = new Color(0.6f, 0.6f, 0.6f), // gris neutral
 	};
 
 	// Adyacencias por nombre normalizado
@@ -228,20 +233,13 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		// --- Adyacencia ---
 		ConstruirAdyacencia(lista);
 
-		// --- Estado Inicial: repartir territorios ---
-		int turn = 0;
-		foreach (Node node in lista)
-		{
-			if (node is NodoTerreno tInit)
-			{
-				int idx = turn++ % numPlayers; // 0,1,(2),0,1,(2)...
-				string ownerId = idx == 0 ? "J1" : (idx == 1 ? "J2" : "J3");
-				var color = _colorPorId[ownerId];
-				tInit.SetDueno(ownerId, color);
-				tInit.SetTropas(3);
-				ActualizarContadorTropas(tInit);
-			}
-		}
+		// --- Estado Inicial: dividir 14/14/neutral ---
+		var todos = new List<NodoTerreno>();
+		foreach (Node node in lista) if (node is NodoTerreno tt) todos.Add(tt);
+
+		// si hay 2 jugadores reales, usamos neutral; si hay 3, NO
+		bool usarNeutral = (numPlayers == 2);
+		DistribuirTerrenosInicial(todos, usarNeutral);
 
 		rng.Randomize();
 
@@ -250,7 +248,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		_turnOwnerId  = "J1";
 		IniciarTurno();
 		ActualizarInteractividadPorTurno();
-		} // <<==
+	} // <<== _Ready
 
 	// ========= Vecindad por geometría =========
 	private void ConstruirAdyacencia(Godot.Collections.Array<Node> lista)
@@ -441,6 +439,19 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		tropasAtaqueSeleccionadas = Mathf.Clamp(tropasAtaqueSeleccionadas, 1, Mathf.Min(3, Math.Max(0, origenSeleccionado.Tropas - 1)));
 
 		_defenderOwnerId = destinoSeleccionado.DuenoId;
+
+		// Si el defensor es NEUTRAL, defensa automática (sin UI)
+		if (_defenderOwnerId == NEUTRAL_ID)
+		{
+			ResolverDefensaNeutralAuto();
+			_btnLanzar?.Hide();
+			_spAtk?.Hide();
+			_spDef?.Hide();
+			ActualizarInteractividadPorTurno();
+			return;
+		}
+
+		// Caso normal (humano): enviar inicio de defensa
 		var maxDef = Mathf.Clamp(destinoSeleccionado.Tropas, 1, 2);
 		var startDef = new
 		{
@@ -930,6 +941,143 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			t.SetDueno(jugadorId, color);
 	}
 
+	// ===== Reparto inicial 14/14/neutral, disperso =====
+	// ===== Reparto inicial disperso (2P: J1,J2,NEUTRAL | 3P: J1,J2,J3) =====
+	private void DistribuirTerrenosInicial(List<NodoTerreno> todos, bool conNeutral)
+	{
+		Mezclar(todos); // Fisher–Yates con rng de Godot
+
+		// Dueños a usar según modo
+		var owners = conNeutral
+			? new List<string> { "J1", "J2", NEUTRAL_ID }
+			: new List<string> { "J1", "J2", "J3" };
+
+		int nOwners = owners.Count;
+		int total   = todos.Count;
+
+		// Cuotas equilibradas (ej. 42 → 14/14/14). Si no divide exacto reparte el resto 1 a 1.
+		int cuotaBase = total / nOwners;
+		var cuotas  = Enumerable.Repeat(cuotaBase, nOwners).ToArray();
+		int resto   = total - (cuotaBase * nOwners);
+		for (int i = 0; i < resto; i++) cuotas[i]++;
+
+		var asignados = new int[nOwners];
+		int p = 0;
+
+		foreach (var t in todos)
+		{
+			// buscar siguiente owner con cupo
+			int intentos = 0;
+			while (asignados[p] >= cuotas[p] && intentos < nOwners)
+			{
+				p = (p + 1) % nOwners;
+				intentos++;
+			}
+
+			string owner = owners[p];
+			var col = _colorPorId.TryGetValue(owner, out var c) ? c : new Color(0.6f, 0.6f, 0.6f);
+
+			// Asignar dueño y SIEMPRE 3 tropas de base
+			t.SetDueno(owner, col);
+			t.SetTropas(3);
+			ActualizarContadorTropas(t);
+			if (_authoritative) BroadcastTerr(t);
+
+			asignados[p]++;
+			p = (p + 1) % nOwners;
+		}
+	}
+
+	// ===== Combate centralizado =====
+	private void RollAndResolveBattle(int atkDice, int defDice)
+	{
+		if (!_authoritative) return;
+		if (origenSeleccionado == null || destinoSeleccionado == null) return;
+
+		atkDice = Mathf.Clamp(atkDice, 1, Math.Min(3, Math.Max(0, origenSeleccionado.Tropas - 1)));
+		defDice = Mathf.Clamp(defDice, 1, Math.Min(2, destinoSeleccionado.Tropas));
+
+		// Tiradas
+		dadosAtq.Clear();
+		for (int i = 0; i < atkDice; i++) dadosAtq.Add(rng.RandiRange(1, 6));
+		dadosAtq.Sort(); dadosAtq.Reverse();
+
+		dadosDef.Clear();
+		for (int i = 0; i < defDice; i++) dadosDef.Add(rng.RandiRange(1, 6));
+		dadosDef.Sort(); dadosDef.Reverse();
+
+		// Comparación
+		int comps = Math.Min(atkDice, defDice);
+		int bajasDef = 0, bajasAtk = 0;
+		for (int i = 0; i < comps; i++)
+		{
+			if (dadosAtq[i] > dadosDef[i]) bajasDef++;
+			else bajasAtk++;
+		}
+
+		// Aplicar bajas
+		if (destinoSeleccionado != null)
+		{
+			destinoSeleccionado.SetTropas(Mathf.Max(0, destinoSeleccionado.Tropas - bajasDef));
+			ActualizarContadorTropas(destinoSeleccionado);
+			BroadcastTerr(destinoSeleccionado);
+		}
+		if (origenSeleccionado != null)
+		{
+			origenSeleccionado.SetTropas(Mathf.Max(1, origenSeleccionado.Tropas - bajasAtk));
+			ActualizarContadorTropas(origenSeleccionado);
+			BroadcastTerr(origenSeleccionado);
+		}
+
+		// ¿Conquista?
+		if (destinoSeleccionado != null && destinoSeleccionado.Tropas == 0 && origenSeleccionado != null)
+		{
+			var nuevoDuenoId = origenSeleccionado.DuenoId;
+			AsignarDueno(destinoSeleccionado, nuevoDuenoId);
+
+			// Mover mínimo (al menos 1, típico = dados atacante)
+			int mover = Math.Max(1, atkDice);
+			mover = Math.Min(mover, Math.Max(1, origenSeleccionado.Tropas - 1));
+			origenSeleccionado.SetTropas(origenSeleccionado.Tropas - mover);
+			destinoSeleccionado.SetTropas(mover);
+
+			ActualizarContadorTropas(origenSeleccionado);
+			ActualizarContadorTropas(destinoSeleccionado);
+			BroadcastTerr(origenSeleccionado);
+			BroadcastTerr(destinoSeleccionado);
+
+			// Carta por conquista (una vez por turno)
+			var jConquistador = (nuevoDuenoId == "J1") ? j1 : (nuevoDuenoId == "J2" ? j2 : j3);
+			OtorgarCartaUnaVezPorTurno(jConquistador);
+			ActualizarHUDCartas(jConquistador);
+		}
+
+		// Avisar resultado
+		var br = new { type = "battle_result", atk = dadosAtq, def = dadosDef, bajasA = bajasAtk, bajasD = bajasDef };
+		GameManager.Instance.BroadcastPatch(br);
+
+		// LIMPIEZA y rotación (mantengo tu política actual de pasar turno)
+		_esperandoDefensa = false;
+		_defenderOwnerId = "";
+		faseDados = "";
+		origenSeleccionado = null;
+		destinoSeleccionado = null;
+
+		faseTurno = "refuerzo";
+		ResetSeleccionYHUD();
+		CambiarTurno();
+		ActualizarInteractividadPorTurno();
+	}
+
+	private void ResolverDefensaNeutralAuto()
+	{
+		int defMax = (destinoSeleccionado != null) ? Mathf.Clamp(destinoSeleccionado.Tropas, 1, 2) : 1;
+		int atk = tropasAtaqueSeleccionadas > 0 ? tropasAtaqueSeleccionadas : 1;
+
+		OcultarPanelDefensa();
+		RollAndResolveBattle(atk, defMax);
+	}
+
 	// ===== Busca/crea label de tropas =====
 	private Label CreateOrGetTroopLabel(NodoTerreno t)
 	{
@@ -1196,18 +1344,15 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 
 				if (actorIdCards == _turnOwnerId)
 				{
-					// guarda el conteo para el botón Canjear en clientes
 					_turnOwnerCardsCount = n;
 
 					if (_authoritative)
 					{
-						// Host: tiene la mano real; puede mostrar por tipo
 						var jHost = actorIdCards == "J1" ? j1 : (actorIdCards == "J2" ? j2 : j3);
 						ActualizarHUDCartas(jHost);
 					}
 					else
 					{
-						// Cliente: usa detalle si vino en el patch; si no, muestra solo el total
 						int inf, cab, art;
 						if (doc.RootElement.TryGetProperty("inf", out var infEl) &&
 							doc.RootElement.TryGetProperty("cab", out var cabEl) &&
@@ -1225,18 +1370,8 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 						}
 					}
 
-					// refresca la visibilidad del botón Canjear
 					ActualizarInteractividadPorTurno();
 				}
-
-				/*
-				// OPCIONAL: si quieres que cada cliente vea su propia mano aunque no sea su turno:
-				var myId = GameManager.Instance?.MyId;
-				if (!string.IsNullOrEmpty(myId) && myId == actorIdCards)
-				{
-					// Aquí puedes llamar a ActualizarHUDCartasPorNumero(n) o al formato con detalle si vino.
-				}
-				*/
 			}
 			else if (t == "patch_exchange")
 			{
@@ -1332,8 +1467,16 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			);
 
 			_defenderOwnerId = destinoSeleccionado.DuenoId;
-			var maxDef = Mathf.Clamp(destinoSeleccionado.Tropas, 1, 2);
 
+			// Si defensor es NEUTRAL → resolver sin UI
+			if (_defenderOwnerId == NEUTRAL_ID)
+			{
+				ResolverDefensaNeutralAuto();
+				return;
+			}
+
+			// Defender humano: enviar aviso para que elija dados
+			var maxDef = Mathf.Clamp(destinoSeleccionado.Tropas, 1, 2);
 			var startDef = new {
 				type    = "start_defense",
 				defender= _defenderOwnerId,
@@ -1389,60 +1532,8 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 
 			tropasDefensaSeleccionadas = Mathf.Clamp(dice, 1, 2);
 
-			// Tiradas y resolución
-			dadosAtq.Clear();
-			for (int i = 0; i < tropasAtaqueSeleccionadas; i++) dadosAtq.Add(rng.RandiRange(1, 6));
-			dadosAtq.Sort(); dadosAtq.Reverse();
-
-			dadosDef.Clear();
-			for (int i = 0; i < tropasDefensaSeleccionadas; i++) dadosDef.Add(rng.RandiRange(1, 6));
-			dadosDef.Sort(); dadosDef.Reverse();
-
-			int comps = Math.Min(tropasAtaqueSeleccionadas, tropasDefensaSeleccionadas);
-			int bajasDef = 0, bajasAtk = 0;
-			for (int i = 0; i < comps; i++) if (dadosAtq[i] > dadosDef[i]) bajasDef++; else bajasAtk++;
-
-			if (destinoSeleccionado != null)
-			{
-				destinoSeleccionado.SetTropas(Mathf.Max(0, destinoSeleccionado.Tropas - bajasDef));
-				ActualizarContadorTropas(destinoSeleccionado);
-				BroadcastTerr(destinoSeleccionado);
-			}
-			if (origenSeleccionado != null)
-			{
-				origenSeleccionado.SetTropas(Mathf.Max(1, origenSeleccionado.Tropas - bajasAtk));
-				ActualizarContadorTropas(origenSeleccionado);
-				BroadcastTerr(origenSeleccionado);
-			}
-
-			if (destinoSeleccionado != null && destinoSeleccionado.Tropas == 0 && origenSeleccionado != null)
-			{
-				var nuevoDuenoId = origenSeleccionado.DuenoId;
-				AsignarDueno(destinoSeleccionado, nuevoDuenoId);
-				origenSeleccionado.SetTropas(origenSeleccionado.Tropas - 1);
-				destinoSeleccionado.SetTropas(1);
-				ActualizarContadorTropas(origenSeleccionado);
-				ActualizarContadorTropas(destinoSeleccionado);
-				BroadcastTerr(origenSeleccionado);
-				BroadcastTerr(destinoSeleccionado);
-				var jConquistador = (nuevoDuenoId == "J1") ? j1 : (nuevoDuenoId == "J2" ? j2 : j3);
-				OtorgarCartaUnaVezPorTurno(jConquistador);
-				ActualizarHUDCartas(jConquistador); 
-			}
-			var br = new { type = "battle_result", atk = dadosAtq, def = dadosDef, bajasA = bajasAtk, bajasD = bajasDef };
-			GameManager.Instance.BroadcastPatch(br);
-
-			// ==== FIN DE TURNO AUTOMÁTICO (se deja igual) ====
-			_esperandoDefensa = false;
-			_defenderOwnerId = "";
-			faseDados = "";
-			origenSeleccionado = null;
-			destinoSeleccionado = null;
-
-			faseTurno = "refuerzo";
-			ResetSeleccionYHUD();
-			CambiarTurno();
-			ActualizarInteractividadPorTurno();
+			// Resolver con método común
+			RollAndResolveBattle(tropasAtaqueSeleccionadas, tropasDefensaSeleccionadas);
 		}
 		else if (t == "cmd_exchange")
 		{
@@ -1463,6 +1554,15 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			GameManager.Instance.BroadcastPatch(pc);
 			ActualizarHUDCartas(j);
 			ActualizarUI();
+		}
+	}
+	
+	private void Mezclar<T>(List<T> list)
+	{
+		for (int i = list.Count - 1; i > 0; i--)
+		{
+			int j = (int)rng.RandiRange(0, i);
+			(list[i], list[j]) = (list[j], list[i]);
 		}
 	}
 
@@ -1520,7 +1620,6 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			_spAtk.Visible = puedeAtacar && origenSeleccionado != null && destinoSeleccionado != null;
 			
 		// ===== Botón "Canjear cartas" (solo refuerzo) =====
-		// Host: sabe la mano real; Cliente: usa el conteo recibido por patch_cards.
 		int cartasConteo = _authoritative ? (jugadorActual?.Cartas?.Count ?? 0) : _turnOwnerCardsCount;
 		bool puedeCanjearTrio = false;
 
@@ -1529,12 +1628,9 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			if (_authoritative)
 				puedeCanjearTrio = (jugadorActual != null) && jugadorActual.TieneTrioValido(out _);
 			else
-				// En cliente no sabemos el detalle; habilita cuando tenga al menos 3,
-				// el host validará al recibir cmd_exchange
 				puedeCanjearTrio = cartasConteo >= 3;
 		}
 
-		// Mostrar SIEMPRE en refuerzos, pero deshabilitar si no se puede
 		if (_btnCanjear != null)
 		{
 			_btnCanjear.Visible  = miTurno && (faseTurno == "refuerzo");
