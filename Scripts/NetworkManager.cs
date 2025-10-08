@@ -11,7 +11,7 @@ using System.Threading;
 
 public partial class NetworkManager : Node
 {
-	// ===== Señales =====
+	// señales
 	[Signal] public delegate void ConnectedEventHandler();                                // (Cliente) Conectado al server
 	[Signal] public delegate void DisconnectedEventHandler(string reason);                // (Cliente) Desconectado del server
 	[Signal] public delegate void ServerClientConnectedEventHandler(int peerId);          // (Servidor) Nuevo cliente
@@ -19,14 +19,14 @@ public partial class NetworkManager : Node
 	[Signal] public delegate void MessageReceivedEventHandler(string json, int peerId);   // Mensaje entrante (peerId emisor en servidor; 0 en cliente)
 	[Signal] public delegate void LogEventHandler(string text);                           // Logs
 
-	// ===== Rol =====
+	// Rol
 	private enum Role { None, Server, Client }
 	private Role _role = Role.None;
 
-	// ===== Estado común =====
+	//  Estado 
 	private volatile bool _running = false;
 
-	// ===== Servidor =====
+	// Servidor
 	private TcpListener _listener;
 	private Thread _acceptThread;
 
@@ -52,7 +52,7 @@ public partial class NetworkManager : Node
 	private StreamWriter _clientWriter;
 	private Thread _clientRxThread;
 
-	// ===== Colas para pasar al hilo principal =====
+	// Colas 
 	private readonly ConcurrentQueue<(string json, int peerId)> _inbox = new();
 	private readonly ConcurrentQueue<string> _logs = new();
 
@@ -66,7 +66,7 @@ public partial class NetworkManager : Node
 
 	public override void _Process(double delta)
 	{
-		// Eventos diferidos al hilo principal
+		// Eventos 
 		if (_pendingConnected)
 		{
 			_pendingConnected = false;
@@ -87,7 +87,7 @@ public partial class NetworkManager : Node
 			EmitSignal(SignalName.Log, l);
 	}
 
-	// ================== SERVIDOR (multi-cliente) ==================
+	// Servidor
 	public void StartServer(int port)
 	{
 		StopAll();
@@ -144,7 +144,7 @@ public partial class NetworkManager : Node
 		}
 		catch (SocketException)
 		{
-			// Listener parado; salida limpia
+			// Listener 
 		}
 		catch (Exception e)
 		{
@@ -161,8 +161,6 @@ public partial class NetworkManager : Node
 				var line = info.Reader.ReadLine(); // un JSON por línea
 				if (line == null) break;
 
-				// En servidor, encolamos (peerId del emisor) y dejamos que GameManager
-				// decida si hay que broadcast (patches) o procesar (cmd_*).
 				_inbox.Enqueue((line, info.PeerId));
 			}
 		}
@@ -184,7 +182,7 @@ public partial class NetworkManager : Node
 		}
 	}
 
-	// ===== Envío desde SERVIDOR =====
+	// Envío desde server
 	public void SendJsonToAll(object message)
 	{
 		var json = JsonSerializer.Serialize(message);
@@ -236,7 +234,7 @@ public partial class NetworkManager : Node
 		}
 	}
 
-	// ================== CLIENTE ==================
+	// Cliente
 	public void ConnectTo(string host, int port)
 	{
 		StopAll();
@@ -302,7 +300,7 @@ public partial class NetworkManager : Node
 
 	public void SendRawJson(string json)
 	{
-		// Permitir enviar si existe conexión cliente activa (incluye host auto-conectado)
+
 		if (_clientWriter == null) { _logs.Enqueue("[NET][CLI] No hay conexión cliente activa."); return; }
 
 		try
@@ -316,8 +314,7 @@ public partial class NetworkManager : Node
 		}
 	}
 
-	// ================== AUTO-CONEXIÓN DEL HOST ==================
-	// Conecta el host a sí mismo como cliente sin detener el servidor
+ 
 	private void ConnectSelfAsClient(int port)
 	{
 		new Thread(() =>
@@ -347,7 +344,6 @@ public partial class NetworkManager : Node
 		}) { IsBackground = true }.Start();
 	}
 
-	// ================== PARAR TODO ==================
 	public void StopAll()
 	{
 		_running = false;

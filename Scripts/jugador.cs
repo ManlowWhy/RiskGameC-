@@ -12,21 +12,16 @@ namespace Scripts
 		public string Color { get; set; }
 		public int TropasDisponibles { get; set; }
 
-		/// <summary>Lista de territorios que controla.</summary>
+
 		public List<TerrenoNodo> Territorios { get; set; } = new List<TerrenoNodo>();
 
-		/// <summary>Cartas del jugador.</summary>
+
 		public List<Carta> Cartas { get; } = new List<Carta>();
 
-		/// <summary>Flags opcionales (no estrictamente usados por MapaUI).</summary>
+
 		public bool ConquistoEsteTurno { get; set; } = false;
 		public bool RecibioCartaEsteTurno { get; set; } = false;
 
-		// =========================
-		//         CARTAS
-		// =========================
-
-		/// <summary>Devuelve true si hay un trío válido y lo entrega en 'trio'.</summary>
 		public bool TieneTrioValido(out List<Carta> trio)
 		{
 			trio = null;
@@ -43,7 +38,7 @@ namespace Scripts
 				}
 			}
 
-			// Uno de cada (si existen los 3 tipos)
+			// Uno de cada 
 			if (porTipo.Keys.Contains(TipoCarta.Infanteria) &&
 				porTipo.Keys.Contains(TipoCarta.Caballeria) &&
 				porTipo.Keys.Contains(TipoCarta.Artilleria))
@@ -60,13 +55,10 @@ namespace Scripts
 			return false;
 		}
 
-		/// <summary>Recibe una carta.</summary>
 		public void RecibirCarta(Carta c)
 		{
 			if (c != null) Cartas.Add(c);
 		}
-
-		/// <summary>Intercambia un trío por tropas (valor lo decide MapaUI/FiboCounter).</summary>
 		public void IntercambiarCartas(List<Carta> trio, int tropasOtorgadas)
 		{
 			if (trio == null || trio.Count != 3) return;
@@ -74,14 +66,12 @@ namespace Scripts
 			TropasDisponibles += Math.Max(0, tropasOtorgadas);
 		}
 
-		/// <summary>Overload sin tropas (solo quita cartas).</summary>
 		public void IntercambiarCartas(List<Carta> trio)
 		{
 			if (trio == null || trio.Count != 3) return;
 			foreach (var c in trio) Cartas.Remove(c);
 		}
 
-		/// <summary>Conteo por tipo para HUD y lógica.</summary>
 		public (int inf, int cab, int art) ConteoPorTipo()
 		{
 			int inf = 0, cab = 0, art = 0;
@@ -94,7 +84,6 @@ namespace Scripts
 			return (inf, cab, art);
 		}
 
-		/// <summary>Selecciona un trío determinista (prioriza uno de cada; si no, tres iguales).</summary>
 		public List<Carta> ElegirTrioDeterminista()
 		{
 			if (Cartas == null || Cartas.Count < 3) return null;
@@ -111,7 +100,7 @@ namespace Scripts
 				};
 			}
 
-			// Tres iguales del tipo más abundante
+			// Tres iguales 
 			var counts = new (TipoCarta tipo, int n)[] {
 				(TipoCarta.Infanteria, inf),
 				(TipoCarta.Caballeria, cab),

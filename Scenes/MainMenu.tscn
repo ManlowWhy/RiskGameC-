@@ -11,7 +11,7 @@ anchors_preset = 0
 script = ExtResource("1_tt5f1")
 
 [node name="TextureRect" type="TextureRect" parent="."]
-layout_mode = 2
+layout_mode = 0
 offset_left = 577.0
 offset_top = 287.0
 offset_right = 577.0
@@ -21,7 +21,7 @@ expand_mode = 1
 stretch_mode = 3
 
 [node name="Risk" type="TextureRect" parent="."]
-layout_mode = 2
+layout_mode = 0
 offset_left = 225.0
 offset_top = -141.0
 offset_right = 1249.0

@@ -7,11 +7,7 @@ using NodoTerreno = global::Terreno; // Tu script de Godot adjunto a Area2D
 // Métodos de extensión para mantener compatibilidad con el código antiguo
 public static class TerrenoCompat
 {
-	/// <summary>
-	/// Devuelve los territorios adyacentes resolviendo los nombres en Vecinos
-	/// usando el grupo "Terreno" de la escena actual.
-	/// Permite llamar:  territorio.Adyacentes()
-	/// </summary>
+
 	public static IEnumerable<NodoTerreno> Adyacentes(this NodoTerreno t)
 	{
 		var tree = Engine.GetMainLoop() as SceneTree;
@@ -30,10 +26,6 @@ public static class TerrenoCompat
 		}
 	}
 
-	/// <summary>
-	/// Reemplazo de CambiarDueno(jugador).
-	/// Pinta el territorio y asigna DuenoId en base al Alias del jugador.
-	/// </summary>
 	public static void CambiarDueno(this NodoTerreno t, Jugador j)
 	{
 		// Mapea el color string del jugador a Godot.Color
