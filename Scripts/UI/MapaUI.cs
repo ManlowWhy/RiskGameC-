@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using System.Text.Json;   // <- necesario para JsonDocument
+using System.Linq;        // <- por si Jugador usa LINQ en cartas
 
 using NodoTerreno = global::Terreno;
 
@@ -13,6 +15,10 @@ public interface IProcesaComandos { void ProcessNetCommand(string json); }
 
 public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 {
+	// === Neutral (bando sin turno) ===
+	private const string NEUTRAL_ID = "NEUTRAL";
+	private const int NEUTRAL_TROOPS_PER_TERR = 3;
+
 	// === Jugadores ===
 	private Jugador j1;
 	private Jugador j2;
@@ -25,7 +31,8 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 	private NodoTerreno origenSeleccionado = null;
 	private NodoTerreno destinoSeleccionado = null;
 
-	private string faseTurno = "refuerzo"; // refuerzo, ataque, movimiento
+	// orden: refuerzo -> movimiento -> ataque
+	private string faseTurno = "refuerzo";
 	private string faseDados = "";         // atacante, defensor
 	private string _turnOwnerId = "J1";    // dueño del turno (según host)
 
@@ -34,38 +41,48 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 	private readonly List<int> dadosAtq = new();
 	private readonly List<int> dadosDef = new();
 	private readonly RandomNumberGenerator rng = new();
-	// Cartas / Fibo
-	private MazoCartas _mazo;
-	private FiboCounter _fibo = new();
-	// HUD de cartas
-	[Export] private NodePath CartasLabelPath;
-	private Label _cartasLabel;
+
+	// === Cartas / Fibonacci ===
+	private Scripts.MazoCartas _mazo;
+	private Scripts.FiboCounter _fibo = new();
 
 	// Online
 	private bool _isOnline, _isHost, _authoritative;
 	private NetworkManager _net;
+	private readonly Dictionary<Jugador, bool> _recibioCartaTurno = new();
 
 	// === HUD NodePaths ===
 	[Export] private NodePath TurnoLabelPath;
 	[Export] private NodePath ResultadoDadoPath;
 	[Export] private NodePath LanzarDadoPath;
 	[Export] private NodePath FinalizarRefuerzosPath;
-	[Export] private NodePath FinalizarMovimientoPath;
 	[Export] private NodePath CantidadAtaquePath;
 	[Export] private NodePath CantidadDefensaPath;
+	[Export] private NodePath IrAAtaquePath;
+	[Export] private NodePath FinalizarTurnoPath;
+	[Export] private NodePath CartasLabelPath;
+	[Export] private NodePath CanjearCartasPath;
+	private Label _cartasLabel;
 
 	// === HUD refs ===
 	private Label _turnoLabel, _resultado;
-	private Button _btnLanzar, _btnFinRef, _btnFinMov;
+	private Button _btnLanzar, _btnFinRef;
 	private SpinBox _spAtk, _spDef;
+	private Button _btnIrAtaque;
+	private Button _btnFinTurno;
+	private Button _btnCanjear;   
 
 	// === Defensa interactiva (UI del defensor) ===
 	private Control _defensePanel;
 	private Label _defenseTitle;
 	private SpinBox _defenseSpin;
-	private Button _defenseDiceBtn;
-	private string _defenderOwnerId = "";   // "J1"/"J2"/"J3"
+  	private Button _defenseDiceBtn;
+	private string _defenderOwnerId = "";   // "J1"/"J2"/"J3"/"NEUTRAL"
 	private bool _esperandoDefensa = false;
+	private int _turnOwnerCardsCount = 0;
+
+	// Utilidades
+	private static bool NodeVivo(Node n) => n != null && GodotObject.IsInstanceValid(n) && n.IsInsideTree();
 
 	// Colores por jugador-id para pintar territorios
 	private readonly Dictionary<string, Color> _colorPorId = new()
@@ -73,6 +90,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		["J1"] = new Color(0.9f, 0.2f, 0.2f), // rojo
 		["J2"] = new Color(0.2f, 0.4f, 0.9f), // azul
 		["J3"] = new Color(0.2f, 0.8f, 0.2f), // verde
+		["NEUTRAL"] = new Color(0.6f, 0.6f, 0.6f), // gris neutral
 	};
 
 	// Adyacencias por nombre normalizado
@@ -85,17 +103,42 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		_resultado  = GetNodeOrNull<Label>(ResultadoDadoPath ?? "HUD/ResultadoDado");
 		_btnLanzar  = GetNodeOrNull<Button>(LanzarDadoPath ?? "HUD/LanzarDado");
 		_btnFinRef  = GetNodeOrNull<Button>(FinalizarRefuerzosPath ?? "HUD/FinalizarRefuerzos");
-		_btnFinMov  = GetNodeOrNull<Button>(FinalizarMovimientoPath ?? "HUD/FinalizarMovimiento");
 		_spAtk      = GetNodeOrNull<SpinBox>(CantidadAtaquePath ?? "HUD/CantidadAtaque");
 		_spDef      = GetNodeOrNull<SpinBox>(CantidadDefensaPath ?? "HUD/CantidadDefensa");
+		_btnCanjear = GetNodeOrNull<Button>(CanjearCartasPath ?? "HUD/CanjearCartasBtn");
 
-		if (_btnLanzar != null) { _btnLanzar.Pressed += OnLanzarDado; _btnLanzar.Visible = false; }
-		if (_btnFinRef != null) { _btnFinRef.Pressed += OnFinalizarRefuerzos; _btnFinRef.Visible = false; }
-		if (_btnFinMov != null) { _btnFinMov.Pressed += OnFinalizarMovimiento; _btnFinMov.Visible = false; }
+		if (NodeVivo(_btnLanzar)) { _btnLanzar.Pressed += OnLanzarDado; _btnLanzar.Visible = false; }
+		if (NodeVivo(_btnFinRef)) { _btnFinRef.Pressed += OnFinalizarRefuerzos; _btnFinRef.Visible = false; }
 		_spAtk?.Hide();
 		_spDef?.Hide();
 
-		// Panel de defensa (si no existe en escena, se crea)
+		_btnIrAtaque = GetNodeOrNull<Button>(IrAAtaquePath ?? "HUD/IrAAtaqueBtn");
+		if (NodeVivo(_btnIrAtaque))
+		{
+			_btnIrAtaque.Text = "Ir a ATAQUE";
+			_btnIrAtaque.Pressed += OnIrAAtaquePressed;
+			_btnIrAtaque.Visible = false;
+		}
+		
+		_btnFinTurno = GetNodeOrNull<Button>(FinalizarTurnoPath ?? "HUD/FinalizarTurnoBtn");
+		if (NodeVivo(_btnFinTurno))
+		{
+			_btnFinTurno.Disabled = false;
+			_btnFinTurno.Text = "Terminar turno";
+			_btnFinTurno.Pressed += OnTerminarTurnoPressed;
+			_btnFinTurno.Visible = false;
+		}
+		
+		if (NodeVivo(_btnCanjear))
+		{
+			_btnCanjear.Text = "Canjear cartas";
+			_btnCanjear.Pressed += OnCanjearCartasPressed;
+			_btnCanjear.Visible = false;
+		}
+		
+		_cartasLabel = GetNodeOrNull<Label>(CartasLabelPath ?? "HUD/CartasLabel");
+
+		// Panel defensa (si no existe, lo creo)
 		_defensePanel = GetNodeOrNull<Control>("HUD/DefensePanel");
 		if (_defensePanel == null)
 		{
@@ -118,7 +161,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		}
 
 		var hud = GetNodeOrNull<Control>("HUD");
-		if (hud != null) hud.MouseFilter = Control.MouseFilterEnum.Ignore;
+		if (hud != null) hud.MouseFilter = Control.MouseFilterEnum.Stop;
 
 		// --- Jugadores desde GameManager ---
 		var gm         = GameManager.Instance;
@@ -146,14 +189,10 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		_isHost   = GameManager.Instance?.IsHost   ?? false;
 		_authoritative = !_isOnline || _isHost;
 		_net = GetNodeOrNull<NetworkManager>("/root/NetworkManager");
-		// Importante: NO nos enganchamos a _net.MessageReceived aquí,
-		// GameManager ya reenvía a ApplyNetPatch / ProcessNetCommand.
-		
+
 		// ====== Cartas / mazo / fibo (solo host construye el mazo; clientes reflejan) ======
-		_cartasLabel = GetNodeOrNull<Label>(CartasLabelPath ?? "HUD/CartasLabel");
 		if (_isHost)
 		{
-			// Construir lista de ids de territorios a partir de la escena:
 			var ids = new List<string>();
 			var terrNodes = GetTree().GetNodesInGroup("Terreno");
 			foreach (Node n in terrNodes)
@@ -164,14 +203,12 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 					if (!string.IsNullOrEmpty(id)) ids.Add(id);
 				}
 			}
-			// Usa tu ctor real si existe; si no, habrá fallback al robar.
-			try { _mazo = (MazoCartas)System.Activator.CreateInstance(typeof(MazoCartas), ids); }
+			try { _mazo = new Scripts.MazoCartas(ids); }
 			catch { _mazo = null; }
 			_fibo?.Reset();
 		}
 		ActualizarHUDCartas(jugadorActual);
 
-		
 		// --- Grupo y señales de territorios ---
 		var terrRoot = GetNodeOrNull<Node>("Territorios");
 		if (terrRoot != null)
@@ -179,37 +216,30 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			foreach (Node child in terrRoot.GetChildren())
 				if (child is NodoTerreno tt && !tt.IsInGroup("Terreno")) tt.AddToGroup("Terreno");
 		}
+
 		var lista = GetTree().GetNodesInGroup("Terreno");
 		foreach (Node node in lista)
 		{
 			if (node is NodoTerreno t)
 			{
 				if (string.IsNullOrWhiteSpace(t.Nombre)) t.Nombre = t.Name;
-				t.Connect(NodoTerreno.SignalName.Clicked, new Callable(this, nameof(OnTerrenoClicked)));
-				t.Connect(NodoTerreno.SignalName.Hovered, new Callable(this, nameof(OnTerrenoHovered)));
+				t.Connect(NodoTerreno.SignalName.Clicked,  Callable.From<NodoTerreno>(OnTerrenoClicked));
+				t.Connect(NodoTerreno.SignalName.Hovered, Callable.From<NodoTerreno, bool>(OnTerrenoHovered));
 				CreateOrGetTroopLabel(t);
 				ActualizarContadorTropas(t);
 			}
 		}
-		
 
 		// --- Adyacencia ---
 		ConstruirAdyacencia(lista);
 
-		// --- Estado Inicial: repartir territorios J1/J2(/J3) ---
-		int turn = 0;
-		foreach (Node node in lista)
-		{
-			if (node is NodoTerreno tInit)
-			{
-				int idx = turn++ % numPlayers; // 0,1,(2),0,1,(2)...
-				string ownerId = idx == 0 ? "J1" : (idx == 1 ? "J2" : "J3");
-				var color = _colorPorId[ownerId];
-				tInit.SetDueno(ownerId, color);
-				tInit.SetTropas(3);
-				ActualizarContadorTropas(tInit);
-			}
-		}
+		// --- Estado Inicial: dividir 14/14/neutral ---
+		var todos = new List<NodoTerreno>();
+		foreach (Node node in lista) if (node is NodoTerreno tt) todos.Add(tt);
+
+		// si hay 2 jugadores reales, usamos neutral; si hay 3, NO
+		bool usarNeutral = (numPlayers == 2);
+		DistribuirTerrenosInicial(todos, usarNeutral);
 
 		rng.Randomize();
 
@@ -218,7 +248,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		_turnOwnerId  = "J1";
 		IniciarTurno();
 		ActualizarInteractividadPorTurno();
-	}
+	} // <<== _Ready
 
 	// ========= Vecindad por geometría =========
 	private void ConstruirAdyacencia(Godot.Collections.Array<Node> lista)
@@ -357,7 +387,34 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 	{
 		if (origenSeleccionado == null || destinoSeleccionado == null) return;
 
-		// CLIENTE: enviar cmd_attack con origen/destino
+		// === FASE: MOVIMIENTO ===
+		if (faseTurno == "movimiento")
+		{
+			int n = (int)(_spAtk?.Value ?? 1);
+			n = Mathf.Clamp(n, 1, Math.Max(0, (origenSeleccionado?.Tropas ?? 1) - 1));
+
+			if (!_authoritative)
+			{
+				var myId = GameManager.Instance?.MyId;
+				if (string.IsNullOrEmpty(myId) || myId != _turnOwnerId) return;
+
+				var cmd = new
+				{
+					type   = "cmd_move",
+					actor  = myId,
+					n      = n,
+					origen = NormalizarNombre(origenSeleccionado?.Nombre ?? ""),
+					destino= NormalizarNombre(destinoSeleccionado?.Nombre ?? "")
+				};
+				GameManager.Instance.SendCmd(cmd);
+				return;
+			}
+
+			AplicarMovimiento(origenSeleccionado, destinoSeleccionado, n);
+			return;
+		}
+
+		// === FASE: ATAQUE ===
 		if (!_authoritative)
 		{
 			var myId = GameManager.Instance?.MyId;
@@ -377,11 +434,24 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			return;
 		}
 
-		// HOST: solo prepara y pide defensa
+		// HOST: preparar defensa
 		tropasAtaqueSeleccionadas = (int)(_spAtk?.Value ?? 1);
 		tropasAtaqueSeleccionadas = Mathf.Clamp(tropasAtaqueSeleccionadas, 1, Mathf.Min(3, Math.Max(0, origenSeleccionado.Tropas - 1)));
 
 		_defenderOwnerId = destinoSeleccionado.DuenoId;
+
+		// Si el defensor es NEUTRAL, defensa automática (sin UI)
+		if (_defenderOwnerId == NEUTRAL_ID)
+		{
+			ResolverDefensaNeutralAuto();
+			_btnLanzar?.Hide();
+			_spAtk?.Hide();
+			_spDef?.Hide();
+			ActualizarInteractividadPorTurno();
+			return;
+		}
+
+		// Caso normal (humano): enviar inicio de defensa
 		var maxDef = Mathf.Clamp(destinoSeleccionado.Tropas, 1, 2);
 		var startDef = new
 		{
@@ -401,35 +471,120 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		ActualizarInteractividadPorTurno();
 	}
 
+	private void OnIrAAtaquePressed()
+	{
+		if (!_authoritative)
+		{
+			GameManager.Instance?.SendCmd(new { type = "cmd_end_phase" });
+			return;
+		}
+
+		if (faseTurno != "movimiento") return;
+
+		faseTurno = "ataque";
+		ResetSeleccionYHUD();
+		BroadcastPhase();
+		ActualizarUI();
+		ActualizarInteractividadPorTurno();
+	}
+	
+	private void OnTerminarTurnoPressed()
+	{
+		if (!_authoritative)
+		{
+			GameManager.Instance?.SendCmd(new { type = "cmd_end_phase" });
+			return;
+		}
+
+		if (faseTurno == "ataque")
+		{
+			OnFinalizarMovimiento(); // ← dejamos igual tu cierre de turno actual
+		}
+	}
+	
+	private void OnCanjearCartasPressed()
+	{
+		if (jugadorActual == null) return;
+
+		// Cliente: pide al host que canjee (el host valida el trío)
+		if (!_authoritative)
+		{
+			GameManager.Instance?.SendCmd(new { type = "cmd_exchange" });
+			return;
+		}
+
+		// Host: ejecuta el canje si hay trío válido
+		if (!jugadorActual.TieneTrioValido(out _)) return;
+		AplicarAutocanjeYSumarFibo(jugadorActual);  // ya hace fibo + parches + HUD
+		ActualizarInteractividadPorTurno();         // refresca visibilidad del botón
+	}
+
+	private void AplicarMovimiento(NodoTerreno orig, NodoTerreno dest, int n)
+	{
+		if (orig == null || dest == null) return;
+		if (faseTurno != "movimiento") return;
+		if (GetOwnerId(jugadorActual) != _turnOwnerId) return;
+		if (orig.DuenoId != GetOwnerId(jugadorActual)) return;
+		if (dest.DuenoId != GetOwnerId(jugadorActual)) return;
+		if (!SonVecinos(orig, dest)) return;
+		if (orig.Tropas <= 1) return;
+
+		n = Mathf.Clamp(n, 1, Math.Max(0, orig.Tropas - 1));
+
+		orig.SetTropas(orig.Tropas - n);
+		dest.SetTropas(dest.Tropas + n);
+		ActualizarContadorTropas(orig);
+		ActualizarContadorTropas(dest);
+		BroadcastTerr(orig);
+		BroadcastTerr(dest);
+
+		origenSeleccionado = null;
+		destinoSeleccionado = null;
+		_spAtk?.Hide();
+		_btnLanzar?.Hide();
+		ActualizarHUDTrasSeleccion();
+		ActualizarInteractividadPorTurno();
+	}
+
 	private void OnFinalizarRefuerzos()
 	{
 		if (!_authoritative)
 		{
-			var myId = GameManager.Instance?.MyId;
-			if (string.IsNullOrEmpty(myId) || myId != _turnOwnerId) return;
-			GameManager.Instance.SendCmd(new CmdEndPhase { type = "cmd_end_phase" });
+			GameManager.Instance.SendCmd(new { type = "cmd_end_phase" });
 			return;
 		}
 
-		faseTurno = "ataque";
+		faseTurno = "movimiento";
 		_btnFinRef?.Hide();
+
+		ResetSeleccionYHUD();
+
 		BroadcastPhase();
 		ActualizarUI();
 		ActualizarInteractividadPorTurno();
 	}
 
+	// Conservamos este método tal cual (tu cierre de turno)
 	private void OnFinalizarMovimiento()
 	{
 		if (!_authoritative)
 		{
-			var myId = GameManager.Instance?.MyId;
-			if (string.IsNullOrEmpty(myId) || myId != _turnOwnerId) return;
-			GameManager.Instance.SendCmd(new CmdEndPhase { type = "cmd_end_phase" });
+			GameManager.Instance.SendCmd(new { type = "cmd_end_phase" });
 			return;
 		}
 
-		_btnFinMov?.Hide();
+		if (faseTurno == "movimiento")
+		{
+			faseTurno = "ataque";
+			ResetSeleccionYHUD();
+			BroadcastPhase();
+			ActualizarUI();
+			ActualizarInteractividadPorTurno();
+			return;
+		}
+
 		faseTurno = "refuerzo";
+		ResetSeleccionYHUD();
 		BroadcastPhase();
 		CambiarTurno();
 		ActualizarInteractividadPorTurno();
@@ -444,7 +599,6 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 
 		if (!_authoritative)
 		{
-			// Sólo si es mi turno
 			var myId = GameManager.Instance?.MyId;
 			if (string.IsNullOrEmpty(myId) || myId != _turnOwnerId) return;
 
@@ -452,7 +606,43 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			var cmd = new CmdClick { type = "cmd_click", terr = terrId, actor = myId };
 			GameManager.Instance.SendCmd(cmd);
 
-			// ECO local para mostrar botón/spin
+			if (faseTurno == "movimiento")
+			{
+				if (origenSeleccionado == null)
+				{
+					if (t.DuenoId == myId && t.Tropas > 1)
+					{
+						origenSeleccionado = t;
+						destinoSeleccionado = null;
+						_spDef?.Hide();
+						AjustarMaximosDados();
+						ActualizarHUDTrasSeleccion();
+						ActualizarInteractividadPorTurno();
+					}
+					return;
+				}
+
+				if (destinoSeleccionado == null)
+				{
+					if (t != origenSeleccionado && t.DuenoId == myId && SonVecinos(origenSeleccionado, t))
+					{
+						destinoSeleccionado = t;
+						AjustarMaximosDados();
+						ActualizarHUDTrasSeleccion();
+						ActualizarInteractividadPorTurno();
+					}
+					return;
+				}
+
+				origenSeleccionado = null; destinoSeleccionado = null;
+				_btnLanzar?.Hide();
+				_spAtk?.Hide();
+				_spDef?.Hide();
+				ActualizarHUDTrasSeleccion();
+				ActualizarInteractividadPorTurno();
+				return;
+			}
+
 			if (faseTurno == "ataque")
 			{
 				if (origenSeleccionado == null)
@@ -467,6 +657,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 					}
 					return;
 				}
+
 				if (destinoSeleccionado == null)
 				{
 					if (t != origenSeleccionado && t.DuenoId != myId && SonVecinos(origenSeleccionado, t))
@@ -478,19 +669,20 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 					}
 					return;
 				}
-				// tercer clic: reset local
-				origenSeleccionado = null;
-				destinoSeleccionado = null;
+
+				origenSeleccionado = null; destinoSeleccionado = null;
 				_btnLanzar?.Hide();
 				_spAtk?.Hide();
 				_spDef?.Hide();
 				ActualizarHUDTrasSeleccion();
 				ActualizarInteractividadPorTurno();
+				return;
 			}
-			return;
+
+			return; // 🔚 cliente
 		}
 
-		// === HOST ===
+		// ----- Refuerzo -----
 		if (faseTurno == "refuerzo")
 		{
 			if (EsDueno(t, jugadorActual) && jugadorActual.TropasDisponibles > 0)
@@ -502,7 +694,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 				jugadorActual.TropasDisponibles -= 1;
 				if (jugadorActual.TropasDisponibles == 0)
 				{
-					faseTurno = "ataque";
+					faseTurno = "movimiento";
 					_btnFinRef?.Hide();
 				}
 				BroadcastPhase();
@@ -512,6 +704,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			return;
 		}
 
+		// ----- Ataque -----
 		if (faseTurno == "ataque")
 		{
 			if (origenSeleccionado == null)
@@ -521,7 +714,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 					origenSeleccionado = t;
 					_spAtk?.Hide();
 					_spDef?.Hide();
-					_spAtk?.Show(); _btnLanzar?.Show();
+					_btnLanzar?.Show();
 					ActualizarHUDTrasSeleccion();
 					ActualizarInteractividadPorTurno();
 				}
@@ -536,21 +729,61 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 
 				destinoSeleccionado = t;
 				AjustarMaximosDados();
-				_spAtk?.Show(); _btnLanzar?.Show();
+				_spAtk?.Show();
+				_btnLanzar?.Show();
 				_spDef?.Hide();
 				ActualizarHUDTrasSeleccion();
 				ActualizarInteractividadPorTurno();
 				return;
 			}
 
-			// tercer clic: reset selección
-			origenSeleccionado = null;
-			destinoSeleccionado = null;
+			origenSeleccionado = null; destinoSeleccionado = null;
 			_btnLanzar?.Hide();
 			_spAtk?.Hide();
 			_spDef?.Hide();
 			ActualizarHUDTrasSeleccion();
 			ActualizarInteractividadPorTurno();
+			return;
+		}
+
+		// ----- Movimiento -----
+		if (faseTurno == "movimiento")
+		{
+			if (origenSeleccionado == null)
+			{
+				if (EsDueno(t, jugadorActual) && t.Tropas > 1)
+				{
+					origenSeleccionado = t;
+					destinoSeleccionado = null;
+					if (_btnLanzar != null) { _btnLanzar.Text = "Mover"; _btnLanzar.Hide(); }
+					_spDef?.Hide();
+					AjustarMaximosDados();
+					ActualizarHUDTrasSeleccion();
+					ActualizarInteractividadPorTurno();
+				}
+				return;
+			}
+
+			if (destinoSeleccionado == null)
+			{
+				if (t != origenSeleccionado && EsDueno(t, jugadorActual) && SonVecinos(origenSeleccionado, t))
+				{
+					destinoSeleccionado = t;
+					AjustarMaximosDados();
+					if (_btnLanzar != null) { _btnLanzar.Text = "Mover"; _btnLanzar.Show(); }
+					ActualizarHUDTrasSeleccion();
+					ActualizarInteractividadPorTurno();
+				}
+				return;
+			}
+
+			origenSeleccionado = null; destinoSeleccionado = null;
+			_btnLanzar?.Hide();
+			_spAtk?.Hide();
+			_spDef?.Hide();
+			ActualizarHUDTrasSeleccion();
+			ActualizarInteractividadPorTurno();
+			return;
 		}
 	}
 
@@ -572,11 +805,11 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			jugadorActual.RecibioCartaEsteTurno = false;
 			ActualizarHUDCartas(jugadorActual);
 		}
+
 		// Autocanje si llegó a 6 o más (solo host)
 		if (_isHost && jugadorActual != null && jugadorActual.Cartas.Count >= 6)
-		{
 			AplicarAutocanjeYSumarFibo(jugadorActual);
-		}
+		
 		jugadorActual.TropasDisponibles = Math.Max(3,
 			(jugadorActual.Territorios != null) ? jugadorActual.Territorios.Count / 3 : 3);
 
@@ -586,6 +819,8 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		_btnLanzar?.Hide();
 		_spAtk?.Hide();
 		_spDef?.Hide();
+		_recibioCartaTurno[jugadorActual] = false;
+		_turnOwnerCardsCount = jugadorActual?.Cartas?.Count ?? 0;
 
 		origenSeleccionado = null;
 		destinoSeleccionado = null;
@@ -636,13 +871,27 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 	private void AjustarMaximosDados()
 	{
 		bool listo = (origenSeleccionado != null && destinoSeleccionado != null);
-
 		if (!listo)
 		{
 			_spAtk?.Hide();
 			_spDef?.Hide();
 			if (_spAtk != null) _spAtk.MaxValue = 0;
 			if (_spDef != null) _spDef.MaxValue = 0;
+			return;
+		}
+
+		if (faseTurno == "movimiento")
+		{
+			var maxMove = Math.Max(0, origenSeleccionado.Tropas - 1);
+			if (_spAtk != null)
+			{
+				_spAtk.MinValue = 1;
+				_spAtk.MaxValue = Math.Max(1, maxMove);
+				if (_spAtk.Value > _spAtk.MaxValue) _spAtk.Value = _spAtk.MaxValue;
+				if (_spAtk.Value < _spAtk.MinValue) _spAtk.Value = _spAtk.MinValue;
+				_spAtk.Show();
+			}
+			_spDef?.Hide();
 			return;
 		}
 
@@ -658,11 +907,23 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 
 	private void ActualizarUI()
 	{
-		if (_turnoLabel == null)
-			_turnoLabel = GetNodeOrNull<Label>(TurnoLabelPath ?? "HUD/TurnoLabel");
-
 		if (_turnoLabel != null)
 			_turnoLabel.Text = $"Turno: {jugadorActual.Alias} · Fase: {faseTurno.ToUpper()} · Refuerzos: {jugadorActual.TropasDisponibles}";
+	}
+	
+	private void IrAMovimiento()
+	{
+		faseTurno = "movimiento";
+		origenSeleccionado = null;
+		destinoSeleccionado = null;
+		_btnLanzar?.Hide();
+		_spAtk?.Hide();
+		_spDef?.Hide();
+		ActualizarHUDTrasSeleccion();
+
+		BroadcastPhase();
+		ActualizarUI();
+		ActualizarInteractividadPorTurno();
 	}
 
 	private void ActualizarHUDTrasSeleccion()
@@ -680,15 +941,149 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			t.SetDueno(jugadorId, color);
 	}
 
+	// ===== Reparto inicial 14/14/neutral, disperso =====
+	// ===== Reparto inicial disperso (2P: J1,J2,NEUTRAL | 3P: J1,J2,J3) =====
+	private void DistribuirTerrenosInicial(List<NodoTerreno> todos, bool conNeutral)
+	{
+		Mezclar(todos); // Fisher–Yates con rng de Godot
+
+		// Dueños a usar según modo
+		var owners = conNeutral
+			? new List<string> { "J1", "J2", NEUTRAL_ID }
+			: new List<string> { "J1", "J2", "J3" };
+
+		int nOwners = owners.Count;
+		int total   = todos.Count;
+
+		// Cuotas equilibradas (ej. 42 → 14/14/14). Si no divide exacto reparte el resto 1 a 1.
+		int cuotaBase = total / nOwners;
+		var cuotas  = Enumerable.Repeat(cuotaBase, nOwners).ToArray();
+		int resto   = total - (cuotaBase * nOwners);
+		for (int i = 0; i < resto; i++) cuotas[i]++;
+
+		var asignados = new int[nOwners];
+		int p = 0;
+
+		foreach (var t in todos)
+		{
+			// buscar siguiente owner con cupo
+			int intentos = 0;
+			while (asignados[p] >= cuotas[p] && intentos < nOwners)
+			{
+				p = (p + 1) % nOwners;
+				intentos++;
+			}
+
+			string owner = owners[p];
+			var col = _colorPorId.TryGetValue(owner, out var c) ? c : new Color(0.6f, 0.6f, 0.6f);
+
+			// Asignar dueño y SIEMPRE 3 tropas de base
+			t.SetDueno(owner, col);
+			t.SetTropas(3);
+			ActualizarContadorTropas(t);
+			if (_authoritative) BroadcastTerr(t);
+
+			asignados[p]++;
+			p = (p + 1) % nOwners;
+		}
+	}
+
+	// ===== Combate centralizado =====
+	private void RollAndResolveBattle(int atkDice, int defDice)
+	{
+		if (!_authoritative) return;
+		if (origenSeleccionado == null || destinoSeleccionado == null) return;
+
+		atkDice = Mathf.Clamp(atkDice, 1, Math.Min(3, Math.Max(0, origenSeleccionado.Tropas - 1)));
+		defDice = Mathf.Clamp(defDice, 1, Math.Min(2, destinoSeleccionado.Tropas));
+
+		// Tiradas
+		dadosAtq.Clear();
+		for (int i = 0; i < atkDice; i++) dadosAtq.Add(rng.RandiRange(1, 6));
+		dadosAtq.Sort(); dadosAtq.Reverse();
+
+		dadosDef.Clear();
+		for (int i = 0; i < defDice; i++) dadosDef.Add(rng.RandiRange(1, 6));
+		dadosDef.Sort(); dadosDef.Reverse();
+
+		// Comparación
+		int comps = Math.Min(atkDice, defDice);
+		int bajasDef = 0, bajasAtk = 0;
+		for (int i = 0; i < comps; i++)
+		{
+			if (dadosAtq[i] > dadosDef[i]) bajasDef++;
+			else bajasAtk++;
+		}
+
+		// Aplicar bajas
+		if (destinoSeleccionado != null)
+		{
+			destinoSeleccionado.SetTropas(Mathf.Max(0, destinoSeleccionado.Tropas - bajasDef));
+			ActualizarContadorTropas(destinoSeleccionado);
+			BroadcastTerr(destinoSeleccionado);
+		}
+		if (origenSeleccionado != null)
+		{
+			origenSeleccionado.SetTropas(Mathf.Max(1, origenSeleccionado.Tropas - bajasAtk));
+			ActualizarContadorTropas(origenSeleccionado);
+			BroadcastTerr(origenSeleccionado);
+		}
+
+		// ¿Conquista?
+		if (destinoSeleccionado != null && destinoSeleccionado.Tropas == 0 && origenSeleccionado != null)
+		{
+			var nuevoDuenoId = origenSeleccionado.DuenoId;
+			AsignarDueno(destinoSeleccionado, nuevoDuenoId);
+
+			// Mover mínimo (al menos 1, típico = dados atacante)
+			int mover = Math.Max(1, atkDice);
+			mover = Math.Min(mover, Math.Max(1, origenSeleccionado.Tropas - 1));
+			origenSeleccionado.SetTropas(origenSeleccionado.Tropas - mover);
+			destinoSeleccionado.SetTropas(mover);
+
+			ActualizarContadorTropas(origenSeleccionado);
+			ActualizarContadorTropas(destinoSeleccionado);
+			BroadcastTerr(origenSeleccionado);
+			BroadcastTerr(destinoSeleccionado);
+
+			// Carta por conquista (una vez por turno)
+			var jConquistador = (nuevoDuenoId == "J1") ? j1 : (nuevoDuenoId == "J2" ? j2 : j3);
+			OtorgarCartaUnaVezPorTurno(jConquistador);
+			ActualizarHUDCartas(jConquistador);
+		}
+
+		// Avisar resultado
+		var br = new { type = "battle_result", atk = dadosAtq, def = dadosDef, bajasA = bajasAtk, bajasD = bajasDef };
+		GameManager.Instance.BroadcastPatch(br);
+
+		// LIMPIEZA y rotación (mantengo tu política actual de pasar turno)
+		_esperandoDefensa = false;
+		_defenderOwnerId = "";
+		faseDados = "";
+		origenSeleccionado = null;
+		destinoSeleccionado = null;
+
+		faseTurno = "refuerzo";
+		ResetSeleccionYHUD();
+		CambiarTurno();
+		ActualizarInteractividadPorTurno();
+	}
+
+	private void ResolverDefensaNeutralAuto()
+	{
+		int defMax = (destinoSeleccionado != null) ? Mathf.Clamp(destinoSeleccionado.Tropas, 1, 2) : 1;
+		int atk = tropasAtaqueSeleccionadas > 0 ? tropasAtaqueSeleccionadas : 1;
+
+		OcultarPanelDefensa();
+		RollAndResolveBattle(atk, defMax);
+	}
+
 	// ===== Busca/crea label de tropas =====
 	private Label CreateOrGetTroopLabel(NodoTerreno t)
 	{
 		if (!NodeVivo(t)) return null;
 
-		// usar siempre "TropasLabel"
 		var lbl = t.GetNodeOrNull<Label>("TropasLabel");
-
-		// crear si no existe
 		if (lbl == null)
 		{
 			lbl = new Label
@@ -698,7 +1093,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 				AutowrapMode = TextServer.AutowrapMode.Off,
 				HorizontalAlignment = HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Center,
-				TopLevel = false // ¡sin TopLevel!
+				TopLevel = false
 			};
 			lbl.MouseFilter = Control.MouseFilterEnum.Ignore;
 			lbl.ZIndex = 200;
@@ -709,12 +1104,76 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			t.AddChild(lbl);
 		}
 
-		// eliminar duplicados (labels viejos pegados al Terreno)
 		foreach (Node ch in t.GetChildren())
 			if (ch is Label l && l != lbl) l.QueueFree();
 
 		ReposicionarLabel(t, lbl);
 		return lbl;
+	}
+
+	// ======== Helpers de cartas ========
+	private Scripts.Carta NuevaCartaAleatoria()
+	{
+		var rngLocal = new System.Random();
+		var tipo = (Scripts.TipoCarta)rngLocal.Next(0, 3);
+		string terrId = "NA";
+		var lista = GetTree().GetNodesInGroup("Terreno");
+		foreach (Node n in lista)
+		{
+			if (n is NodoTerreno t) { terrId = NormalizarNombre(t.Nombre ?? t.Name); break; }
+		}
+		return new Scripts.Carta(tipo, terrId);
+	}
+
+	private Scripts.Carta RobarCarta()
+	{
+		if (_mazo != null)
+		{
+			var c = _mazo.Robar();
+			if (c != null) return c;
+		}
+		return NuevaCartaAleatoria();
+	}
+
+	private void OtorgarCartaUnaVezPorTurno(Jugador j)
+	{
+		if (j == null || j.RecibioCartaEsteTurno) return;
+		var carta = RobarCarta();
+		j.RecibirCarta(carta);
+		j.RecibioCartaEsteTurno = true;
+
+		var patchCards = new Scripts.PatchCards { type = "patch_cards", actor = GetOwnerId(j), n = j.Cartas.Count };
+		GameManager.Instance.BroadcastPatch(patchCards);
+		ActualizarHUDCartas(j);
+	}
+
+	private void AplicarAutocanjeYSumarFibo(Jugador j)
+	{
+		if (j == null) return;
+		if (!j.TieneTrioValido(out var trio)) return;
+
+		int bonus = _fibo?.Avanzar() ?? 0;
+		j.IntercambiarCartas(trio, bonus);
+
+		var px = new Scripts.PatchExchange { type = "patch_exchange", actor = GetOwnerId(j), fibo = bonus };
+		GameManager.Instance.BroadcastPatch(px);
+		var pc = new Scripts.PatchCards { type = "patch_cards", actor = GetOwnerId(j), n = j.Cartas.Count };
+		GameManager.Instance.BroadcastPatch(pc);
+		ActualizarHUDCartas(j);
+		ActualizarUI();
+	}
+
+	private void ActualizarHUDCartas(Jugador j)
+	{
+		if (_cartasLabel == null || j == null) return;
+		var (inf, cab, art) = j.ConteoPorTipo();
+		_cartasLabel.Text = $"Inf x{inf} | Cab x{cab} | Art x{art}   ({j.Cartas.Count}/5)";
+	}
+	
+	private void ActualizarHUDCartasPorNumero(int total)
+	{
+		if (_cartasLabel == null) return;
+		_cartasLabel.Text = $"Cartas: {total}/5";
 	}
 
 	private void ReposicionarLabel(NodoTerreno t, Label lbl)
@@ -728,7 +1187,6 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		foreach (var p in poly.Polygon) cLocal += p;
 		cLocal /= poly.Polygon.Length;
 
-		// centro global y colocación del control
 		Vector2 cGlobal = poly.GetGlobalTransform() * cLocal;
 		Vector2 ms = lbl.GetMinimumSize();
 		lbl.Size = ms;
@@ -803,7 +1261,7 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 				if (_colorPorId.TryGetValue(owner, out var col))
 					terr.SetDueno(owner, col);
 				else
-					terr.SetDueno(owner, new Color(0.8f, 0.8f, 0.8f)); // fallback
+					terr.SetDueno(owner, new Color(0.8f, 0.8f, 0.8f));
 
 				terr.SetTropas(tropas);
 
@@ -813,6 +1271,8 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			}
 			else if (t == "patch_phase")
 			{
+				var faseAnterior = faseTurno;
+
 				faseTurno = doc.RootElement.GetProperty("fase").GetString();
 				var turnoId = doc.RootElement.GetProperty("turno").GetString();
 				int refz = doc.RootElement.GetProperty("refuerzos").GetInt32();
@@ -822,61 +1282,25 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 
 				_turnOwnerId = turnoId;
 
-				if (faseTurno != "ataque")
-				{
-					origenSeleccionado = null;
-					destinoSeleccionado = null;
-					_btnLanzar?.Hide();
-					_spAtk?.Hide();
-					_spDef?.Hide();
-					ActualizarHUDTrasSeleccion();
-				}
+				if (!string.Equals(faseAnterior, faseTurno, StringComparison.OrdinalIgnoreCase))
+					ResetSeleccionYHUD();
 
 				ActualizarUI();
 				ActualizarInteractividadPorTurno();
 			}
-			else if (t == "patch_cards")
-			{
-				var actorIdCards = doc.RootElement.GetProperty("actor").GetString(); // "J1"/"J2"/"J3"
-				int n = doc.RootElement.GetProperty("n").GetInt32();
-				var j = actorIdCards == "J1" ? j1 : (actorIdCards == "J2" ? j2 : j3);
-				if (j != null)
-				{
-					// No sincronizamos detalle por tipo aquí; solo refrescamos HUD si es el jugador visible
-					if (actorIdCards == _turnOwnerId) ActualizarHUDCartas(j);
-				}
-			}
-			else if (t == "patch_exchange")
-			{
-				var actorIdEx = doc.RootElement.GetProperty("actor").GetString();
-				int fibo = doc.RootElement.GetProperty("fibo").GetInt32();
-				var j = actorIdEx == "J1" ? j1 : (actorIdEx == "J2" ? j2 : j3);
-				if (j != null)
-				{
-					if (actorIdEx == _turnOwnerId && _resultado != null)
-						_resultado.Text = $"Intercambio aplicado: +{fibo} tropas (Fibonacci)";
-					ActualizarHUDCartas(j);
-					ActualizarUI();
-				}
-			}	
 			else if (t == "start_defense")
 			{
 				var defender = doc.RootElement.GetProperty("defender").GetString();
 				int max = doc.RootElement.GetProperty("max").GetInt32();
 				var myId = GameManager.Instance?.MyId;
 
-				// Mostrar panel SOLO al defensor (host o cliente)
 				if (!string.IsNullOrEmpty(myId) && myId == defender)
 					MostrarPanelDefensa(Mathf.Clamp(max, 1, 2));
 				else
 					OcultarPanelDefensa();
 
-				// ⚠️ Importante:
-				// NO limpiar selección en el host (autoridad), porque necesita origen/destino
-				// para aplicar las bajas cuando llegue cmd_defense_choice.
 				if (!_authoritative)
 				{
-					// En clientes no autoritativos (incluido el atacante), limpiar UI local.
 					origenSeleccionado = null;
 					destinoSeleccionado = null;
 					_btnLanzar?.Hide();
@@ -912,6 +1336,56 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 				ActualizarHUDTrasSeleccion();
 				ActualizarInteractividadPorTurno();
 			}
+			// ====== PARCHES DE CARTAS ======
+			else if (t == "patch_cards")
+			{
+				var actorIdCards = doc.RootElement.GetProperty("actor").GetString();
+				int n = doc.RootElement.GetProperty("n").GetInt32();
+
+				if (actorIdCards == _turnOwnerId)
+				{
+					_turnOwnerCardsCount = n;
+
+					if (_authoritative)
+					{
+						var jHost = actorIdCards == "J1" ? j1 : (actorIdCards == "J2" ? j2 : j3);
+						ActualizarHUDCartas(jHost);
+					}
+					else
+					{
+						int inf, cab, art;
+						if (doc.RootElement.TryGetProperty("inf", out var infEl) &&
+							doc.RootElement.TryGetProperty("cab", out var cabEl) &&
+							doc.RootElement.TryGetProperty("art", out var artEl))
+						{
+							inf = infEl.GetInt32();
+							cab = cabEl.GetInt32();
+							art = artEl.GetInt32();
+							if (_cartasLabel != null)
+								_cartasLabel.Text = $"Inf x{inf} | Cab x{cab} | Art x{art}   ({n}/5)";
+						}
+						else
+						{
+							ActualizarHUDCartasPorNumero(n);
+						}
+					}
+
+					ActualizarInteractividadPorTurno();
+				}
+			}
+			else if (t == "patch_exchange")
+			{
+				var actorIdEx = doc.RootElement.GetProperty("actor").GetString();
+				int fibo = doc.RootElement.GetProperty("fibo").GetInt32();
+				var j = actorIdEx == "J1" ? j1 : (actorIdEx == "J2" ? j2 : j3);
+				if (j != null)
+				{
+					if (actorIdEx == _turnOwnerId && _resultado != null)
+						_resultado.Text = $"Intercambio aplicado: +{fibo} tropas (Fibonacci)";
+					ActualizarHUDCartas(j);
+					ActualizarUI();
+				}
+			}
 		}
 		catch (Exception e)
 		{
@@ -930,10 +1404,10 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		if (t == "cmd_click")
 		{
 			var terrId = doc.RootElement.GetProperty("terr").GetString();
-			var actorIdCmd  = doc.RootElement.GetProperty("actor").GetString(); // "J1"/"J2"/"J3"
-			if (actorIdCmd != GetOwnerId(jugadorActual)) return;
+			var actor  = doc.RootElement.GetProperty("actor").GetString(); // "J1"/"J2"/"J3"
+			if (actor != GetOwnerId(jugadorActual)) return;
 
-			var actorJ = actorIdCmd == "J1" ? j1 : (actorIdCmd == "J2" ? j2 : j3);
+			var actorJ = actor == "J1" ? j1 : (actor == "J2" ? j2 : j3);
 
 			NodoTerreno terr = null;
 			var lista = GetTree().GetNodesInGroup("Terreno");
@@ -955,12 +1429,12 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		}
 		else if (t == "cmd_attack")
 		{
-			var actorAt   = doc.RootElement.GetProperty("actor").GetString();
+			var actor   = doc.RootElement.GetProperty("actor").GetString();
 			int atkReq  = doc.RootElement.GetProperty("atk").GetInt32();
 			var origId  = (doc.RootElement.TryGetProperty("origen", out var oEl) ? oEl.GetString() : "") ?? "";
 			var destId  = (doc.RootElement.TryGetProperty("destino", out var dEl) ? dEl.GetString() : "") ?? "";
 
-			if (actorAt != GetOwnerId(jugadorActual)) return;
+			if (actor != GetOwnerId(jugadorActual)) return;
 			if (faseTurno != "ataque") return;
 
 			NodoTerreno orig = null, dest = null;
@@ -978,8 +1452,8 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			}
 			if (orig == null || dest == null) return;
 
-			if (orig.DuenoId != actorAt) return;
-			if (dest.DuenoId == actorAt) return;
+			if (orig.DuenoId != actor) return;
+			if (dest.DuenoId == actor) return;
 			if (!SonVecinos(orig, dest)) return;
 			if (orig.Tropas <= 1) return;
 
@@ -993,8 +1467,16 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			);
 
 			_defenderOwnerId = destinoSeleccionado.DuenoId;
-			var maxDef = Mathf.Clamp(destinoSeleccionado.Tropas, 1, 2);
 
+			// Si defensor es NEUTRAL → resolver sin UI
+			if (_defenderOwnerId == NEUTRAL_ID)
+			{
+				ResolverDefensaNeutralAuto();
+				return;
+			}
+
+			// Defender humano: enviar aviso para que elija dados
+			var maxDef = Mathf.Clamp(destinoSeleccionado.Tropas, 1, 2);
 			var startDef = new {
 				type    = "start_defense",
 				defender= _defenderOwnerId,
@@ -1006,101 +1488,83 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 			GameManager.Instance.BroadcastPatch(startDef);
 			_esperandoDefensa = true;
 		}
+		else if (t == "cmd_move")
+		{
+			var actor = doc.RootElement.GetProperty("actor").GetString();
+			int n     = doc.RootElement.GetProperty("n").GetInt32();
+			var origId= (doc.RootElement.TryGetProperty("origen",  out var oEl) ? oEl.GetString() : "") ?? "";
+			var destId= (doc.RootElement.TryGetProperty("destino", out var dEl) ? dEl.GetString() : "") ?? "";
+
+			if (actor != GetOwnerId(jugadorActual)) return;
+			if (faseTurno != "movimiento") return;
+
+			NodoTerreno orig = null, dest = null;
+			var lista = GetTree().GetNodesInGroup("Terreno");
+			foreach (Node nnode in lista)
+			{
+				if (nnode is NodoTerreno tt)
+				{
+					var id1 = NormalizarNombre(tt.Nombre);
+					var id2 = NormalizarNombre(tt.Name);
+					if (orig == null && (id1 == origId || id2 == origId)) orig = tt;
+					if (dest == null && (id1 == destId || id2 == destId)) dest = tt;
+					if (orig != null && dest != null) break;
+				}
+			}
+			if (orig == null || dest == null) return;
+
+			AplicarMovimiento(orig, dest, n);
+		}
 		else if (t == "cmd_end_phase")
 		{
 			if (GetOwnerId(jugadorActual) != _turnOwnerId) return;
-			if (faseTurno == "refuerzo") OnFinalizarRefuerzos();
-			else                         OnFinalizarMovimiento();
+
+			if (faseTurno == "refuerzo")        OnFinalizarRefuerzos();   // → movimiento
+			else if (faseTurno == "movimiento") OnFinalizarMovimiento();  // → ataque
+			else                                OnFinalizarMovimiento();  // ataque → fin de turno
 		}
 		else if (t == "cmd_defense_choice")
 		{
-			var actorDf = doc.RootElement.GetProperty("actor").GetString(); // "J1"/"J2"/"J3"
+			var actor = doc.RootElement.GetProperty("actor").GetString(); // "J1"/"J2"/"J3"
 			var dice  = doc.RootElement.GetProperty("dice").GetInt32();
 
-			if (!_esperandoDefensa || actorDf != _defenderOwnerId) return;
+			if (!_esperandoDefensa || actor != _defenderOwnerId) return;
 
 			tropasDefensaSeleccionadas = Mathf.Clamp(dice, 1, 2);
 
-			// Tiradas y resolución
-			dadosAtq.Clear();
-			for (int i = 0; i < tropasAtaqueSeleccionadas; i++) dadosAtq.Add(rng.RandiRange(1, 6));
-			dadosAtq.Sort(); dadosAtq.Reverse();
-
-			dadosDef.Clear();
-			for (int i = 0; i < tropasDefensaSeleccionadas; i++) dadosDef.Add(rng.RandiRange(1, 6));
-			dadosDef.Sort(); dadosDef.Reverse();
-
-			int comps = Math.Min(tropasAtaqueSeleccionadas, tropasDefensaSeleccionadas);
-			int bajasDef = 0, bajasAtk = 0;
-			for (int i = 0; i < comps; i++) if (dadosAtq[i] > dadosDef[i]) bajasDef++; else bajasAtk++;
-
-			if (destinoSeleccionado != null)
-			{
-				destinoSeleccionado.SetTropas(Mathf.Max(0, destinoSeleccionado.Tropas - bajasDef));
-				ActualizarContadorTropas(destinoSeleccionado);
-				BroadcastTerr(destinoSeleccionado);
-			}
-			if (origenSeleccionado != null)
-			{
-				origenSeleccionado.SetTropas(Mathf.Max(1, origenSeleccionado.Tropas - bajasAtk));
-				ActualizarContadorTropas(origenSeleccionado);
-				BroadcastTerr(origenSeleccionado);
-			}
-
-			if (destinoSeleccionado != null && destinoSeleccionado.Tropas == 0 && origenSeleccionado != null)
-			{
-				var nuevoDuenoId = origenSeleccionado.DuenoId;
-				AsignarDueno(destinoSeleccionado, nuevoDuenoId);
-				origenSeleccionado.SetTropas(origenSeleccionado.Tropas - 1);
-				destinoSeleccionado.SetTropas(1);
-				ActualizarContadorTropas(origenSeleccionado);
-				ActualizarContadorTropas(destinoSeleccionado);
-				BroadcastTerr(origenSeleccionado);
-				BroadcastTerr(destinoSeleccionado);
-				if (_isHost && jugadorActual != null)
-				{
-					jugadorActual.ConquistoEsteTurno = true;
-					if (!jugadorActual.RecibioCartaEsteTurno)
-					{
-						OtorgarCartaUnaVezPorTurno(jugadorActual);
-					}
-				}
-			}
-
-			var br = new { type = "battle_result", atk = dadosAtq, def = dadosDef, bajasA = bajasAtk, bajasD = bajasDef };
-			GameManager.Instance.BroadcastPatch(br);
-
-			_esperandoDefensa = false;
-			_defenderOwnerId = "";
-			faseDados = "";
-			origenSeleccionado = null;
-			destinoSeleccionado = null;
-
-			// Diseño actual: turno termina tras cada batalla
-			OnFinalizarMovimiento();
+			// Resolver con método común
+			RollAndResolveBattle(tropasAtaqueSeleccionadas, tropasDefensaSeleccionadas);
 		}
 		else if (t == "cmd_exchange")
-		// Solo host procesa
-		if (!_authoritative) return;
-		var actor = doc.RootElement.GetProperty("actor").GetString(); // "J1"/"J2"/"J3"
-		var j = actor == "J1" ? j1 : (actor == "J2" ? j2 : j3);
-		if (j == null) return;
-		if (GetOwnerId(jugadorActual) != actor) return; // solo el del turno
-		// Usa tu validador existente
-		if (!j.TieneTrioValido(out var trio)) return;
-		// Sumar fibo en host y aplicar
-		int bonus = _fibo?.Avanzar() ?? 0;
-		j.IntercambiarCartas(trio, bonus);
-		// Emitir parches
-		var px = new Scripts.PatchExchange { type = "patch_exchange", actor = actor, fibo = bonus };
-		GameManager.Instance.BroadcastPatch(px);
-		
-		var pc = new Scripts.PatchCards { type = "patch_cards", actor = actor, n = j.Cartas.Count };
-		GameManager.Instance.BroadcastPatch(pc);
-		ActualizarHUDCartas(j);
-		ActualizarUI();
+		{
+			if (!_authoritative) return;
+			var actor = doc.RootElement.GetProperty("actor").GetString(); // "J1"/"J2"/"J3"
+			var j = actor == "J1" ? j1 : (actor == "J2" ? j2 : j3);
+			if (j == null) return;
+			if (!ReferenceEquals(jugadorActual, j)) return;
+			if (!j.TieneTrioValido(out var trio)) return;
+
+			int bonus = _fibo?.Avanzar() ?? 0;
+			j.IntercambiarCartas(trio, bonus);
+
+			var px = new Scripts.PatchExchange { type = "patch_exchange", actor = actor, fibo = bonus };
+			GameManager.Instance.BroadcastPatch(px);
+
+			var pc = new Scripts.PatchCards { type = "patch_cards", actor = actor, n = j.Cartas.Count };
+			GameManager.Instance.BroadcastPatch(pc);
+			ActualizarHUDCartas(j);
+			ActualizarUI();
+		}
 	}
 	
+	private void Mezclar<T>(List<T> list)
+	{
+		for (int i = list.Count - 1; i > 0; i--)
+		{
+			int j = (int)rng.RandiRange(0, i);
+			(list[i], list[j]) = (list[j], list[i]);
+		}
+	}
 
 	// ======= Defensa: UI helpers =======
 	private void MostrarPanelDefensa(int maxDados)
@@ -1142,81 +1606,60 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		bool miTurno = !_isOnline || string.IsNullOrEmpty(myId) || myId == _turnOwnerId;
 
 		if (_btnFinRef != null) _btnFinRef.Visible = miTurno && faseTurno == "refuerzo";
-		if (_btnFinMov != null) _btnFinMov.Visible = miTurno && faseTurno == "movimiento";
 
+		if (_btnIrAtaque != null)
+			_btnIrAtaque.Visible = miTurno && faseTurno == "movimiento";
+		if (_btnFinTurno != null)
+			_btnFinTurno.Visible = miTurno && faseTurno == "ataque";
+
+		// Ataque
 		bool puedeAtacar = miTurno && faseTurno == "ataque";
-		if (_btnLanzar != null) _btnLanzar.Visible = puedeAtacar && origenSeleccionado != null && destinoSeleccionado != null;
-		if (_spAtk != null) _spAtk.Visible = puedeAtacar && origenSeleccionado != null && destinoSeleccionado != null;
-	}
+		if (_btnLanzar != null && faseTurno == "ataque")
+			_btnLanzar.Visible = puedeAtacar && origenSeleccionado != null && destinoSeleccionado != null;
+		if (_spAtk != null && faseTurno == "ataque")
+			_spAtk.Visible = puedeAtacar && origenSeleccionado != null && destinoSeleccionado != null;
+			
+		// ===== Botón "Canjear cartas" (solo refuerzo) =====
+		int cartasConteo = _authoritative ? (jugadorActual?.Cartas?.Count ?? 0) : _turnOwnerCardsCount;
+		bool puedeCanjearTrio = false;
 
-	private static bool NodeVivo(Node n)
-	{
-		return n != null && GodotObject.IsInstanceValid(n) && n.IsInsideTree();
-	}
-	// ======== Helpers de cartas ========
-	private Carta NuevaCartaAleatoria()
-	{
-		// Fallback si no hay _mazo con Robar()
-		var rngLocal = new System.Random();
-		var tipo = (TipoCarta)rngLocal.Next(0, 3);
-		// Elegir un territorio existente (cualquiera)
-		string terrId = "NA";
-		var lista = GetTree().GetNodesInGroup("Terreno");
-		foreach (Node n in lista)
+		if (faseTurno == "refuerzo")
 		{
-			if (n is NodoTerreno t) { terrId = NormalizarNombre(t.Nombre ?? t.Name); break; }
+			if (_authoritative)
+				puedeCanjearTrio = (jugadorActual != null) && jugadorActual.TieneTrioValido(out _);
+			else
+				puedeCanjearTrio = cartasConteo >= 3;
 		}
-		return new Carta(tipo, terrId);
-	}
-	private Carta RobarCarta()
-	{
-		if (_mazo != null)
+
+		if (_btnCanjear != null)
 		{
-			var c = _mazo.Robar();
-			if (c != null) return c;
+			_btnCanjear.Visible  = miTurno && (faseTurno == "refuerzo");
+			_btnCanjear.Disabled = !puedeCanjearTrio;
+			_btnCanjear.TooltipText = puedeCanjearTrio
+				? "Canjear 3 cartas (trío válido)."
+				: "Necesitas un trío válido (3 iguales o 1 de cada).";
 		}
-	return NuevaCartaAleatoria();
-	}
-	private void OtorgarCartaUnaVezPorTurno(Jugador j)
-	{
-		if (j == null || j.RecibioCartaEsteTurno) return;
-		var carta = RobarCarta();
-		if (carta == null) return;
-		
-		j.RecibirCarta(carta);               // usa tu método real
-		j.RecibioCartaEsteTurno = true;
-		
-		// Notificar a todos el nuevo tamaño de mano
-		var patchCards = new Scripts.PatchCards { type = "patch_cards", actor = GetOwnerId(j), n = j.Cartas.Count };
-		GameManager.Instance.BroadcastPatch(patchCards);
-		
-		ActualizarHUDCartas(j);
-	}
-	private void AplicarAutocanjeYSumarFibo(Jugador j)
-	{
-		if (j == null) return;
-		// Usa tu selector determinista en Jugador
-		var trio = j.ElegirTrioDeterminista();
-		if (trio == null) return;
-		// Sumar Fibonacci (solo host lleva el contador)
-		int bonus = _fibo?.Avanzar() ?? 0;
-		// Ejecuta el intercambio con otorgamiento de tropas vía tu método real:
-		j.IntercambiarCartas(trio, bonus);
-		// (opcional) _mazo?.Descartar(trio);
-		// Parchear a todos: intercambio y tamaño de mano
-		var px = new Scripts.PatchExchange { type = "patch_exchange", actor = GetOwnerId(j), fibo = bonus };
-		GameManager.Instance.BroadcastPatch(px);
-		var pc = new Scripts.PatchCards { type = "patch_cards", actor = GetOwnerId(j), n = j.Cartas.Count };
-		GameManager.Instance.BroadcastPatch(pc);
-		ActualizarHUDCartas(j);
-		ActualizarUI();
+
+		// Movimiento
+		bool puedeMover = miTurno && faseTurno == "movimiento";
+		if (_btnLanzar != null && faseTurno == "movimiento")
+		{
+			_btnLanzar.Text = "Mover";
+			_btnLanzar.Visible = puedeMover && origenSeleccionado != null && destinoSeleccionado != null;
+		}
+		if (_spAtk != null && faseTurno == "movimiento")
+			_spAtk.Visible = puedeMover && origenSeleccionado != null && destinoSeleccionado != null;
 	}
 	
-	private void ActualizarHUDCartas(Jugador j)
+	private void ResetSeleccionYHUD()
 	{
-		if (_cartasLabel == null || j == null) return;
-		var (inf, cab, art) = j.ConteoPorTipo();   // usa tu helper nuevo
-		_cartasLabel.Text = $"Inf x{inf} | Cab x{cab} | Art x{art}   ({j.Cartas.Count}/5)";
+		origenSeleccionado = null;
+		destinoSeleccionado = null;
+
+		_btnLanzar?.Hide();
+		_spAtk?.Hide();
+		_spDef?.Hide();
+
+		ActualizarHUDTrasSeleccion();
 	}
-	
 }
