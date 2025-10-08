@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://dmh6070uob4o"
+path="res://.godot/imported/Menu 1 - Super Smash Flash 2 Music Extended (1).ogg-3f2f58b5f1e817b4cbccf87f6b9ac3c0.oggvorbisstr"
+
+[deps]
+
+source_file="res://Scripts/Menu 1 - Super Smash Flash 2 Music Extended (1).ogg"
+dest_files=["res://.godot/imported/Menu 1 - Super Smash Flash 2 Music Extended (1).ogg-3f2f58b5f1e817b4cbccf87f6b9ac3c0.oggvorbisstr"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

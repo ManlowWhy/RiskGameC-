@@ -1,0 +1,49 @@
+[gd_scene load_steps=2 format=3 uid="uid://bvc2wjo6nvfoc"]
+
+[ext_resource type="Script" uid="uid://d4ddrjwlqdl6c" path="res://Scripts/UI/MapaUI.cs" id="1_8pptk"]
+
+[node name="Mapa" type="Node2D"]
+script = ExtResource("1_8pptk")
+
+[node name="CostaRica" type="Button" parent="."]
+offset_left = 12.0
+offset_top = 66.0
+offset_right = 100.0
+offset_bottom = 97.0
+text = "Costa Rica
+"
+
+[node name="Panama" type="Button" parent="."]
+offset_left = 136.0
+offset_top = 66.0
+offset_right = 208.0
+offset_bottom = 97.0
+text = "Panama"
+
+[node name="TurnoLabel" type="Label" parent="."]
+offset_left = 14.0
+offset_top = 16.0
+offset_right = 65.0
+offset_bottom = 39.0
+text = "Turno:"
+
+[node name="LanzarDado" type="Button" parent="."]
+offset_left = 8.0
+offset_top = 138.0
+offset_right = 112.0
+offset_bottom = 169.0
+text = "Lanzar dado"
+
+[node name="ResultadoDado" type="Label" parent="."]
+offset_left = 271.0
+offset_top = 18.0
+offset_right = 353.0
+offset_bottom = 41.0
+text = "Resultado:"
+
+[node name="FinalizarRefuerzos" type="Button" parent="."]
+offset_left = 426.0
+offset_top = 66.0
+offset_right = 577.0
+offset_bottom = 97.0
+text = "Finalizar refuerzos"

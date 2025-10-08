@@ -68,10 +68,10 @@ button_mask = 0
 text = "Finalizar"
 
 [node name="FinalizarTurnoBtn" type="Button" parent="HUD"]
-offset_left = 771.0
-offset_top = 23.0
-offset_right = 845.0
-offset_bottom = 89.0
+offset_left = 671.0
+offset_top = 26.0
+offset_right = 795.0
+offset_bottom = 92.0
 scale = Vector2(1.88838, 1.29097)
 button_mask = 0
 text = "Finalizar Turno"

@@ -1,0 +1,19 @@
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 2012
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CrazyRisk", "CrazyRisk.csproj", "{C0C4D491-9D84-44BF-B699-B33D8E68FA25}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+	Debug|Any CPU = Debug|Any CPU
+	ExportDebug|Any CPU = ExportDebug|Any CPU
+	ExportRelease|Any CPU = ExportRelease|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C0C4D491-9D84-44BF-B699-B33D8E68FA25}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C0C4D491-9D84-44BF-B699-B33D8E68FA25}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C0C4D491-9D84-44BF-B699-B33D8E68FA25}.ExportDebug|Any CPU.ActiveCfg = ExportDebug|Any CPU
+		{C0C4D491-9D84-44BF-B699-B33D8E68FA25}.ExportDebug|Any CPU.Build.0 = ExportDebug|Any CPU
+		{C0C4D491-9D84-44BF-B699-B33D8E68FA25}.ExportRelease|Any CPU.ActiveCfg = ExportRelease|Any CPU
+		{C0C4D491-9D84-44BF-B699-B33D8E68FA25}.ExportRelease|Any CPU.Build.0 = ExportRelease|Any CPU
+	EndGlobalSection
+EndGlobal
