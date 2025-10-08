@@ -1,10 +1,9 @@
 namespace Scripts
 {
-	// Contador global de canjes: 2,3,5,8,13,21,34,...
 	public class FiboCounter
 	{
-		private int _a = 1; // arranque para producir 2
-		private int _b = 2; // arranque para producir 3
+		private int _a = 1; 
+		private int _b = 2; 
 		public int Actual { get; private set; } = 0;
 
 		public int Avanzar()
@@ -14,7 +13,7 @@ namespace Scripts
 			int next = _a + _b;
 			_a = _b;
 			_b = next;
-			Actual = _a; // secuencia visible: 2,3,5,8,13,...
+			Actual = _a;
 			return Actual;
 		}
 

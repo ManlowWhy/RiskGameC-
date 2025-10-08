@@ -12,10 +12,6 @@ namespace Scripts
 
 		public int Count => _mazo.Count;
 
-		/// <summary>
-		/// Crea un mazo con 1 carta por territorio, asignando tipos
-		/// Infantería/Caballería/Artillería en rondas (balanceado), y baraja.
-		/// </summary>
 		public MazoCartas(IEnumerable<string> territorios42)
 		{
 			var terrList = territorios42?.ToList() ?? new List<string>();
@@ -41,14 +37,14 @@ namespace Scripts
 			}
 		}
 
-		/// <summary>Robar la carta del tope. Si el mazo está vacío, devuelve null.</summary>
+		/// Robar la carta 
 		public Carta Robar()
 		{
-			if (_mazo.Count == 0) return null;           // En este proyecto: no reciclamos descarte
+			if (_mazo.Count == 0) return null;           
 			return _mazo.Pop();
 		}
 
-		/// <summary>Guarda cartas usadas en descarte (por si luego quieres estadísticas).</summary>
+
 		public void Descartar(IEnumerable<Carta> cartas)
 		{
 			if (cartas == null) return;

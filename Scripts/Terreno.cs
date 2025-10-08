@@ -17,7 +17,7 @@ public partial class Terreno : Area2D
 	{
 		_poly = GetNodeOrNull<Polygon2D>("Polygon2D");
 
-		// Reusar label si ya existe (por ejemplo, escenas viejas)
+		// Reusar label 
 		_lbl = GetNodeOrNull<Label>("TropasLabel");
 		if (_lbl == null)
 		{
@@ -41,7 +41,7 @@ public partial class Terreno : Area2D
 		MouseExited  += () => EmitSignal(SignalName.Hovered, this, false);
 		InputEvent   += OnInputEvent;
 
-		// Aviso si falta colisión (útil para depurar clicks)
+		// Aviso si falta colisión
 		var col = GetNodeOrNull<CollisionPolygon2D>("CollisionPolygon2D");
 		if (col == null)
 			GD.PrintErr($"[WARN] {Name} no tiene CollisionPolygon2D");
@@ -73,7 +73,6 @@ public partial class Terreno : Area2D
 		UpdateLabel(); // ajustar contraste del texto
 	}
 
-	// ---------- Helpers UI ----------
 	private void UpdateLabel()
 	{
 		if (_lbl == null) return;
