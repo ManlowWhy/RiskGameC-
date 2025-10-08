@@ -812,7 +812,10 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		
 		jugadorActual.TropasDisponibles = Math.Max(3,
 			(jugadorActual.Territorios != null) ? jugadorActual.Territorios.Count / 3 : 3);
-
+		if (_isHost) 
+		{
+			jugadorActual.TropasDisponibles += CalcularBonusContinente(jugadorActual);
+		}
 		faseTurno = "refuerzo";
 		_btnFinRef?.Show();
 
@@ -1661,5 +1664,59 @@ public partial class MapaUI : Node2D, IAplicaParches, IProcesaComandos
 		_spDef?.Hide();
 
 		ActualizarHUDTrasSeleccion();
+	}
+	private static readonly Dictionary<string, (string nombre, int bonus)> _contBonus = new()
+	{
+		{ "Africa", ("África", 3) },
+		{ "EU",     ("Europa", 5) },
+		{ "AS",     ("Asia", 7) },
+		{ "Nor",    ("Norteamérica", 5) },
+		{ "Sud",    ("Sudamérica", 2) },
+		{ "OC",     ("Oceanía", 2) },
+	};
+	private static string PrefijoDe(string nombreNodo)
+	{
+		if (string.IsNullOrEmpty(nombreNodo)) return "";
+		int i = 0;
+		while (i < nombreNodo.Length && char.IsLetter(nombreNodo[i])) i++;
+		return (i > 0) ? nombreNodo.Substring(0, i) : "";
+	}
+	private Dictionary<string, int> ContarTotalesPorPrefijoEnEscena()
+	{
+		var tot = new Dictionary<string, int>();
+		var terrRoot = GetNodeOrNull<Node>("Territorios");
+		if (terrRoot == null) return tot;
+		foreach (Node child in terrRoot.GetChildren())
+		{
+			if (child is not NodoTerreno t) continue;
+			var pref = PrefijoDe(t.Name ?? "");
+			if (string.IsNullOrEmpty(pref)) continue;
+			tot[pref] = tot.GetValueOrDefault(pref) + 1;
+		}
+		return tot;
+	}
+	private int CalcularBonusContinente(Jugador j)
+	{
+		if (j == null) return 0;
+		var totPorPrefijo = ContarTotalesPorPrefijoEnEscena();
+		var tienePorPrefijo = new Dictionary<string, int>();;
+		 foreach (var t in j.Territorios ?? Enumerable.Empty<NodoTerreno>())
+		{
+			var pref = PrefijoDe(t?.Name ?? "");
+			if (string.IsNullOrEmpty(pref)) continue;
+			tienePorPrefijo[pref] = tienePorPrefijo.GetValueOrDefault(pref) + 1;
+		}
+		int total = 0;
+		
+		foreach (var kv in _contBonus)
+		{
+			var pref = kv.Key;
+			var bonus = kv.Value.bonus;
+			if (totPorPrefijo.TryGetValue(pref, out int tot) && tot > 0 && tienePorPrefijo.GetValueOrDefault(pref) == tot)
+			{
+				total += bonus;
+			}
+		}
+		return total;
 	}
 }
